@@ -65,3 +65,24 @@ def test_missing_cli(cfg):
     cfg.claude.command = "definitely-not-installed-claude"
     with pytest.raises(ProviderError, match="not found on PATH"):
         ClaudeCLI(cfg.claude, cfg.claude_workdir).complete("sonnet", "hi")
+
+
+def test_finds_claude_outside_path(cfg, fake_claude, monkeypatch, tmp_path):
+    import sys
+    from pathlib import Path
+
+    home = tmp_path / "home"
+    name = "claude.exe" if sys.platform == "win32" else "claude"
+    target = home / ".local" / "bin" / name
+    target.parent.mkdir(parents=True)
+    target.write_bytes(fake_claude.read_bytes())
+    target.chmod(0o755)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("PATH", "")
+    cfg.claude.command = "claude"
+    assert ClaudeCLI(cfg.claude, cfg.claude_workdir).resolve() == str(target)
+
+
+def test_explicit_missing_path_is_not_guessed(cfg):
+    cfg.claude.command = "/nope/claude"
+    assert ClaudeCLI(cfg.claude, cfg.claude_workdir).resolve() is None

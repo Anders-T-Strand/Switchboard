@@ -21,6 +21,25 @@ from .base import Completion, ProviderError
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
+def install_locations() -> list[Path]:
+    """Where Claude Code usually ends up when it isn't on PATH."""
+    home = Path.home()
+    if sys.platform == "win32":
+        appdata = Path(os.environ.get("APPDATA", home / "AppData" / "Roaming"))
+        return [
+            home / ".local" / "bin" / "claude.exe",  # native installer
+            appdata / "npm" / "claude.cmd",  # npm install -g
+            home / ".claude" / "local" / "claude.cmd",
+        ]
+    return [
+        home / ".local" / "bin" / "claude",
+        home / ".claude" / "local" / "claude",
+        home / ".npm-global" / "bin" / "claude",
+        Path("/opt/homebrew/bin/claude"),
+        Path("/usr/local/bin/claude"),
+    ]
+
+
 def parse_cli_output(stdout: str) -> dict:
     """Pull the result object out of `claude -p --output-format json` output.
 
@@ -101,7 +120,20 @@ class ClaudeCLI:
         self._version: tuple[float, str | None] | None = None
 
     def resolve(self) -> str | None:
-        return shutil.which(self.cfg.command)
+        """Find the claude executable: PATH first, then the usual install locations.
+
+        The native installer puts claude in ~/.local/bin, which often isn't on
+        PATH yet in a terminal that was open before the install.
+        """
+        found = shutil.which(self.cfg.command)
+        if found:
+            return found
+        if Path(self.cfg.command).name != self.cfg.command:
+            return None  # an explicit path that doesn't exist
+        for candidate in install_locations():
+            if candidate.is_file():
+                return str(candidate)
+        return None
 
     def _env(self) -> dict:
         env = os.environ.copy()
@@ -131,7 +163,10 @@ class ClaudeCLI:
     def complete(self, model_alias: str, prompt: str, system_prompt: str | None = None) -> Completion:
         exe = self.resolve()
         if not exe:
-            raise ProviderError(f"'{self.cfg.command}' not found on PATH. Install Claude Code and log in first.")
+            raise ProviderError(
+                f"'{self.cfg.command}' was not found on PATH or in the usual install folders. "
+                "Install the Claude Code CLI, or set claude.command in config.yaml to its full path."
+            )
         self.workdir.mkdir(parents=True, exist_ok=True)
 
         args = [exe, "-p", "--output-format", "json", "--model", model_alias,

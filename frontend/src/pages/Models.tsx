@@ -52,7 +52,7 @@ export function Models({ onSynced }: { onSynced: () => void }) {
                     ) : m.available ? (
                       <Light on>Ready</Light>
                     ) : (
-                      <Light on warn>claude CLI not found</Light>
+                      <Light on warn>CLI not found</Light>
                     )}
                   </td>
                 </tr>
@@ -108,8 +108,18 @@ export function Models({ onSynced }: { onSynced: () => void }) {
                 <dt>Claude Code</dt>
                 <dd>
                   <Light on={status.claude.found}>
-                    {status.claude.found ? `${status.claude.version ?? "found"}` : "claude not on PATH"}
+                    {status.claude.found ? `${status.claude.version ?? "found"}` : "CLI not found"}
                   </Light>
+                  {status.claude.found ? (
+                    <span className="muted block">
+                      <code>{status.claude.path}</code>
+                    </span>
+                  ) : (
+                    <span className="muted block">
+                      Install the Claude Code CLI, or set <code>claude.command</code> in config.yaml to the full path of
+                      claude.exe, then restart.
+                    </span>
+                  )}
                   <span className="muted block">
                     {status.claude.use_subscription
                       ? "API key removed from its environment, so calls use your Pro login"

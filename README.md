@@ -54,7 +54,9 @@ powershell -ExecutionPolicy Bypass -File .\start.ps1
 
 Open http://127.0.0.1:8787.
 
-After the first run, `.\start.ps1` just starts the server. Delete `frontend\dist` to force a rebuild after pulling changes.
+After the first run, `.\start.ps1` just starts the server. It rebuilds the dashboard on its own when you pull changes.
+
+If the sidebar says Claude Code wasn't found, run `where.exe claude` in PowerShell. The server also checks `%USERPROFILE%\.local\bin` and `%APPDATA%\npm`, so a fresh install is usually picked up after a restart. Otherwise set `claude.command` in `config.yaml` to the full path of `claude.exe`.
 
 ### Manual setup
 
