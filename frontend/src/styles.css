@@ -391,8 +391,9 @@ label > span {
 .patchbay svg {
   display: block;
   width: 100%;
+  max-width: 1040px; /* keeps jack labels at their designed size on wide screens */
   height: auto;
-  margin-top: 6px;
+  margin: 6px auto 0;
   overflow: visible;
 }
 .cord {
