@@ -20,15 +20,37 @@ def _utf8_stdout() -> None:
             pass
 
 
+def _open_when_ready(url: str) -> None:
+    """Open the browser once the server answers, without blocking startup."""
+    import threading
+    import time
+    import urllib.request
+    import webbrowser
+
+    def wait_and_open() -> None:
+        for _ in range(60):
+            try:
+                urllib.request.urlopen(f"{url}/api/health", timeout=1)
+                webbrowser.open(url)
+                return
+            except OSError:
+                time.sleep(0.5)
+
+    threading.Thread(target=wait_and_open, daemon=True).start()
+
+
 def main(argv: list[str] | None = None) -> int:
     _utf8_stdout()
     parser = argparse.ArgumentParser(prog="switchboard", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--open", action="store_true", help="open the dashboard in your browser once it starts")
     sub = parser.add_subparsers(dest="cmd")
 
     serve = sub.add_parser("serve", help="start the server (default)")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
+    serve.add_argument("--open", action="store_true", default=argparse.SUPPRESS,
+                       help="open the dashboard in your browser once it starts")
 
     ask = sub.add_parser("ask", help="send a prompt to the running server")
     ask.add_argument("prompt", nargs="+", help='prompt text, or "-" to read it from stdin')
@@ -51,7 +73,10 @@ def main(argv: list[str] | None = None) -> int:
 
         host = getattr(args, "host", None) or cfg.server.host
         port = getattr(args, "port", None) or cfg.server.port
-        print(f"Switchboard on http://{'127.0.0.1' if host == '0.0.0.0' else host}:{port}")
+        url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}"
+        print(f"Switchboard on {url}")
+        if args.open:
+            _open_when_ready(url)
         uvicorn.run(create_app(cfg), host=host, port=port, log_level="info")
         return 0
 
