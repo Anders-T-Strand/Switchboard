@@ -1,0 +1,90 @@
+# Switchboard config. Edit this file, then restart the server.
+
+server:
+  host: 127.0.0.1        # 0.0.0.0 (or your Tailscale IP) makes the dashboard reachable from other devices
+  port: 8787
+  data_dir: data         # SQLite database and the scratch folder claude -p runs in
+
+ollama:
+  base_url: http://127.0.0.1:11434
+  timeout_s: 600
+  keep_alive: 30m        # how long Ollama keeps a model in VRAM after a request
+
+claude:
+  command: claude        # the Claude Code CLI on your PATH (claude.exe or claude.cmd on Windows)
+  timeout_s: 300
+  max_turns: 3
+  # Removes ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN from the claude -p environment,
+  # so routed calls count against your Pro plan instead of API billing.
+  use_subscription: true
+  # stdin avoids Windows argument quoting problems. Switch to "arg" only if your CLI ignores stdin.
+  prompt_via: stdin
+  disallowed_tools: [Bash, Edit, MultiEdit, Write, NotebookEdit]
+  extra_args: []         # anything else to pass to claude -p, e.g. ["--strict-mcp-config"]
+  system_prompt: >-
+    You are answering a single question sent from a personal dashboard.
+    Answer directly and completely. Use Markdown where it helps.
+  logs_dir: null         # defaults to CLAUDE_CONFIG_DIR, then ~/.claude
+  sync_interval_s: 60    # how often Claude Code session logs are read for usage stats
+
+# Every model the router can use. Keys are what rules and the dashboard refer to.
+models:
+  qwen-moe:
+    provider: ollama
+    model: qwen3.6:35b-a3b
+    label: Qwen3.6 35B-A3B
+  qwen-dense:
+    provider: ollama
+    model: qwen3.8:27b
+    label: Qwen3.8 27B
+  claude-haiku:
+    provider: claude_cli
+    model: haiku
+    label: Claude Haiku
+  claude-sonnet:
+    provider: claude_cli
+    model: sonnet
+    label: Claude Sonnet
+  claude-opus:
+    provider: claude_cli
+    model: opus
+    label: Claude Opus
+
+routing:
+  classifier:
+    model: qwen-moe          # local model that labels each prompt (task type + complexity 1-5)
+    use_loaded_model: true   # classify with whichever configured local model is already in VRAM
+    think: false             # skip reasoning traces so classification stays fast
+    timeout_s: 60
+    max_prompt_chars: 4000   # only the start of very long prompts is sent to the classifier
+  # If a rule picks a local model that isn't loaded but another configured local model is,
+  # use the loaded one instead of paying for a swap.
+  prefer_loaded_local: true
+  # Tried in order when the routed model fails (Ollama down, claude not logged in, usage limit hit...).
+  fallback_order: [claude-sonnet, qwen-moe]
+  # First matching rule wins. A rule matches when every condition it sets holds.
+  rules:
+    - name: expert
+      min_complexity: 5
+      model: claude-opus
+    - name: hard
+      min_complexity: 4
+      model: claude-sonnet
+    # Uncomment to send moderate coding work to Claude as well:
+    # - name: code
+    #   task_types: [code]
+    #   min_complexity: 3
+    #   model: claude-sonnet
+    - name: default
+      model: qwen-moe
+
+# USD per million tokens (Claude API list prices, Oct 2026). Used for API-equivalent cost
+# estimates only. Your Pro plan isn't billed per token, so treat these as "what this would
+# have cost on the API". Matched against model IDs by substring, first match wins.
+pricing:
+  reference_model: sonnet    # local requests are priced against this to estimate cost avoided
+  models:
+    fable:  {match: fable,  input: 10.00, output: 50.00, cache_read: 1.00, cache_write: 12.50}
+    opus:   {match: opus,   input: 4.00,  output: 20.00, cache_read: 0.20, cache_write: 5.00}
+    sonnet: {match: sonnet, input: 2.00,  output: 10.00, cache_read: 0.10, cache_write: 2.50}
+    haiku:  {match: haiku,  input: 0.10,  output: 0.50,  cache_read: 0.01, cache_write: 0.125}
