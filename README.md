@@ -48,13 +48,19 @@ ollama pull qwen3.6:35b-a3b
 # Make sure Claude Code works headless on your login
 claude -p "say hi"
 
-# First run creates the Python environment, builds the dashboard, then starts the server
-powershell -ExecutionPolicy Bypass -File .\start.ps1
+# Start it. The first run sets up Python and builds the dashboard.
+.\switchboard
 ```
 
-Open http://127.0.0.1:8787.
+The dashboard opens in your browser at http://127.0.0.1:8787. You can also double-click `switchboard.cmd` in Explorer, or make a shortcut to it and pin that to the taskbar.
 
-After the first run, `.\start.ps1` just starts the server. It rebuilds the dashboard on its own when you pull changes.
+After the first run it just starts the server. It rebuilds the dashboard on its own when you pull changes.
+
+To start it from any folder, add this to your PowerShell profile (`notepad $PROFILE`) with your own path:
+
+```powershell
+function switchboard { & "C:\path\to\AI-Dashboard\switchboard.cmd" @args }
+```
 
 If the sidebar says Claude Code wasn't found, run `where.exe claude` in PowerShell. The server also checks `%USERPROFILE%\.local\bin` and `%APPDATA%\npm`, so a fresh install is usually picked up after a restart. Otherwise set `claude.command` in `config.yaml` to the full path of `claude.exe`.
 
