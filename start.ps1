@@ -36,7 +36,7 @@ if ($needBuild) {
     Write-Host "Building the dashboard..."
     Push-Location $frontend
     try {
-        npm install
+        npm ci  # installs exactly what package-lock.json says, without rewriting it
         npm run build
     } finally {
         Pop-Location
