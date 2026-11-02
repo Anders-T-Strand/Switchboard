@@ -136,6 +136,7 @@ export function Overview({ days }: { days: number }) {
                     <th>Model</th>
                     <th className="num">Prompts</th>
                     <th>Effort</th>
+                    <th>Rated</th>
                     <th className="num">Tokens in</th>
                     <th className="num">Tokens out</th>
                     <th className="num">Median time</th>
@@ -151,6 +152,9 @@ export function Overview({ days }: { days: number }) {
                         {m.errors > 0 && <span className="muted block small">{int(m.errors)} failed</span>}
                       </td>
                       <td className="effort-mix">{effortMix(m, config?.efforts ?? [])}</td>
+                      <td className="effort-mix">
+                        {m.rated_good || m.rated_bad ? `${int(m.rated_good)} good, ${int(m.rated_bad)} bad` : "–"}
+                      </td>
                       <td className="num">{compact(m.input_tokens)}</td>
                       <td className="num">{compact(m.output_tokens)}</td>
                       <td className="num">{duration(m.median_latency_ms)}</td>

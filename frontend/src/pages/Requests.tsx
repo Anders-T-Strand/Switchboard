@@ -152,6 +152,14 @@ function RequestDrawer({ id, onClose }: { id: number; onClose: () => void }) {
               {d.task_title ? ` for task "${d.task_title}"` : ""}
               {d.provider_model ? `, model id ${d.provider_model}` : ""}
             </p>
+            {d.conversation_id && (
+              <p>
+                <a href={`#/console?c=${d.conversation_id}`}>
+                  Open the chat{d.conversation_title ? ` "${d.conversation_title}"` : ""}
+                  {d.turn && d.turn > 1 ? `, turn ${d.turn}` : ""}
+                </a>
+              </p>
+            )}
             <RouteSteps view={fromDetail(d)} />
             <section>
               <h3>Prompt</h3>

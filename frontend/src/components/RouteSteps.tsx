@@ -139,6 +139,7 @@ export function RouteSteps({ view, pending = false }: { view: RouteView; pending
 
 export function UsageLine({ d }: { d: RequestDetail }) {
   const parts = [
+    ...(d.context_turns ? [`${d.context_turns} earlier ${d.context_turns === 1 ? "turn" : "turns"} sent along`] : []),
     `${compact(d.input_tokens + d.cache_read_tokens + d.cache_write_tokens)} tokens in`,
     `${compact(d.output_tokens)} out`,
     duration(d.latency_ms),

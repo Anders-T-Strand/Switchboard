@@ -33,6 +33,10 @@ export type RequestRow = {
   created_at: string;
   task_id: number | null;
   task_title: string | null;
+  conversation_id: number | null;
+  conversation_title: string | null;
+  turn: number | null;
+  rating: number | null;
   prompt_preview: string;
   status: "ok" | "error";
   error: string | null;
@@ -70,7 +74,26 @@ export type RequestDetail = Omit<RequestRow, "prompt_preview"> & {
   classifier_ms: number | null;
   provider_model: string | null;
   load_ms: number | null;
+  context_turns: number | null;
   routing?: RoutePlan;
+};
+
+export type ConversationSummary = {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  turns: number;
+  last_model: string | null;
+  last_status: "ok" | "error" | null;
+};
+
+export type Conversation = {
+  id: number;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: RequestDetail[];
 };
 
 export type Task = {
@@ -101,6 +124,8 @@ export type ModelStats = {
   efforts: Record<string, number>;
   thinking: number;
   think_known: number;
+  rated_good: number;
+  rated_bad: number;
 };
 
 export type CcBucket = {
@@ -235,9 +260,16 @@ export const api = {
   config: () => request<ConfigView>("/api/config"),
   sync: () => request<SyncState>("/api/claude-code/sync", { method: "POST" }),
 
-  prompt: (body: { prompt: string; model: string; effort: string; task_id: number | null; system_prompt?: string | null }) =>
+  prompt: (body: {
+    prompt: string;
+    model: string;
+    effort: string;
+    task_id: number | null;
+    conversation_id: number | null;
+    system_prompt?: string | null;
+  }) =>
     request<RequestDetail>("/api/prompt", { method: "POST", body: json(body) }),
-  preview: (body: { prompt: string; model: string; effort: string }) =>
+  preview: (body: { prompt: string; model: string; effort: string; conversation_id: number | null }) =>
     request<RoutePlan>("/api/route/preview", { method: "POST", body: json(body) }),
 
   requests: (q: { limit?: number; offset?: number; task_id?: number | null; model?: string; status?: string }) => {
@@ -248,6 +280,17 @@ export const api = {
     return request<{ total: number; items: RequestRow[] }>(`/api/requests?${params}`);
   },
   request: (id: number) => request<RequestDetail>(`/api/requests/${id}`),
+
+  conversations: (q = "", limit = 100) =>
+    request<{ total: number; items: ConversationSummary[] }>(
+      `/api/conversations?${new URLSearchParams({ q, limit: String(limit) })}`,
+    ),
+  conversation: (id: number) => request<Conversation>(`/api/conversations/${id}`),
+  renameConversation: (id: number, title: string) =>
+    request<Conversation>(`/api/conversations/${id}`, { method: "PATCH", body: json({ title }) }),
+  deleteConversation: (id: number) => request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
+  rate: (id: number, rating: -1 | 0 | 1) =>
+    request<RequestDetail>(`/api/requests/${id}/rating`, { method: "PUT", body: json({ rating }) }),
 
   tasks: () => request<Task[]>("/api/tasks"),
   createTask: (body: { title: string; notes?: string; status?: TaskStatus }) =>

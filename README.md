@@ -2,7 +2,7 @@
 
 A local dashboard that routes each prompt to the model best suited to answer it, and keeps track of tokens, cost and tasks along the way.
 
-Easy prompts go to a local model running in Ollama. Hard ones go to Claude through Claude Code's headless mode (`claude -p`), which runs on a Claude Pro or Max login instead of API billing. Every request is logged with how it was classified, which rule picked the model, what it cost in tokens, and what it would have cost at API prices.
+Easy prompts go to a local model running in Ollama. Hard ones go to Claude through Claude Code's headless mode (`claude -p`), which runs on a Claude Pro or Max login instead of API billing. The Console works as a chat: every prompt is saved as part of a conversation you can come back to and continue, with each turn routed on its own. Every turn is logged with how it was classified, which rule picked the model, what it cost in tokens, and what it would have cost at API prices.
 
 ![Overview](docs/overview.png)
 
@@ -33,9 +33,20 @@ Two details matter on a single GPU:
 
 ![Request detail](docs/request-detail.png)
 
+## Chats
+
+Every prompt belongs to a chat, including ones sent from the terminal, so any earlier question can be picked up again. The Console lists chats newest first, with search over titles and every message.
+
+- **Each turn is routed on its own.** The classifier sees the previous exchange, so a short follow-up like "why?" or "make it shorter" is rated as hard as the work it refers to instead of as trivial.
+- **History travels with the model.** Local models get earlier turns as chat messages. Claude gets them as a transcript in its system prompt, which works even when earlier replies came from Qwen. The oldest turns are left out first once a chat outgrows `chat.history_chars`, and the route note says when that happened.
+- **Rate answers.** Thumbs up or down on each answer. The ratings are counted per model on the Overview and are what a smarter router will learn from.
+- **Download the history.** The chat list links to two JSON Lines files: whole chats, and one line per turn with the routing decision, the outcome, the previous prompt and your rating.
+
+Prompts sent before chats existed were turned into one-turn chats the first time the server started, so they can be continued too.
+
 ## What it tracks
 
-- **Router requests.** Prompt, answer, classification, rule, model, effort, tokens, latency and fallbacks, stored in SQLite.
+- **Chats and router requests.** Prompt, answer, classification, rule, model, effort, context sent along, tokens, latency, fallbacks and your rating, stored in SQLite.
 - **Claude Code usage.** Your own Claude Code sessions are read from `~/.claude/projects/**/*.jsonl` every minute, so the dashboard shows usage by model and day even for work done outside it. Calls the router makes through `claude -p` are tagged separately. Chats on claude.ai don't write local logs, so they can't be counted.
 - **Cost at API rates.** A Pro plan isn't billed per token, so costs are shown as what the same usage would cost on the Claude API. Local answers are priced against a reference model (Sonnet by default) to estimate what running locally kept off Claude. Local and Claude tokenizers differ, so treat that one as a ballpark.
 - **Tasks.** A simple to do / in progress / done board. Attach prompts to a task to see how many tokens each piece of work takes.
@@ -103,9 +114,10 @@ python -m switchboard ask --model claude-opus "Review this design: ..."
 python -m switchboard ask --effort low "Summarize this changelog: ..."
 Get-Content notes.txt | python -m switchboard ask -
 python -m switchboard ask --task 3 "Draft the intro paragraph"
+python -m switchboard ask --chat last "And how would that change on Linux?"
 ```
 
-The routing decision and token counts print to stderr and the answer to stdout, so the answer can be piped somewhere else.
+The routing decision, token counts and chat id print to stderr and the answer to stdout, so the answer can be piped somewhere else. `--chat` takes a chat id or `last` to continue a conversation.
 
 ## Configuration
 
@@ -115,6 +127,7 @@ Everything lives in `config.yaml`. Restart the server after editing it.
 |---|---|
 | `models` | Every model the router can use. `provider` is `ollama` or `claude_cli`. For Claude, `model` is the alias passed to `claude --model` and `max_effort` caps its effort. For Ollama, `think` pins thinking on or off. |
 | `routing.rules` | Ordered rules. Conditions: `task_types`, `min_complexity`, `max_complexity`, `min_reasoning`, `max_reasoning`. Effort: `effort` to pin it, `min_effort` and `max_effort` to clamp it. |
+| `chat.history_chars` | How many characters of earlier conversation go along with each message, per provider. Keep the Ollama budget well under the `num_ctx` set on local models (16384 tokens by default). |
 | `routing.effort.by_reasoning` | Which effort level each reasoning rating gets. Leave a level out to use your own `/effort` setting for it. |
 | `routing.classifier` | Which local model classifies, and whether it may use whatever is already loaded. |
 | `routing.fallback_order` | What to try when the chosen model fails. |
@@ -154,6 +167,7 @@ frontend/src/      React + Vite dashboard
 
 ## Ideas for later
 
-- Train a router on the logged requests (prompt features in, model that should have answered out) and compare it against the classifier
-- Let a request be re-run on a different model from the request log to compare answers
-- Thumbs up / down on answers to build labels for that router
+- Index every turn in a vector store so chats can be searched by meaning, and so the router can look at how similar past prompts were answered and rated
+- Train a router on the rated turns and compare it against the classifier
+- Stream answers as they're generated
+- Re-run a turn on a different model to compare answers
