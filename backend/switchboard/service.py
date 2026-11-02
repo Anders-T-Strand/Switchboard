@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import json
+from typing import Iterator
+
 from .config import Config
-from .db import connect, now_iso, rows
+from .db import connect, make_title, now_iso, rows
 from .pricing import cost_usd, find_price, reference_cost
 from .providers import ClaudeCLI, OllamaClient, ProviderError
-from .router import Router
+from .router import Router, Turn
 
 TASK_STATUSES = ("todo", "doing", "done")
 
 
 class NotFound(Exception):
     pass
+
+
+def _like(q: str) -> str:
+    escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 class Service:
@@ -24,27 +32,50 @@ class Service:
 
     # Prompts -------------------------------------------------------------------
 
-    def _plan(self, prompt: str, model: str, effort: str):
+    def _plan(self, prompt: str, model: str, effort: str, context: Turn | None = None):
         try:
-            return self.router.plan(prompt, model, effort)
+            return self.router.plan(prompt, model, effort, context)
         except KeyError as e:
             raise ValueError(str(e).strip("'\"")) from None
 
-    def preview(self, prompt: str, model: str = "auto", effort: str = "auto") -> dict:
-        return self._plan(prompt, model, effort).to_dict(self.cfg)
+    def _history(self, conversation_id: int) -> list[Turn]:
+        """Answered turns of a conversation, oldest first. Failed turns are left out."""
+        with connect() as conn:
+            if not conn.execute("SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)).fetchone():
+                raise NotFound(f"chat {conversation_id} not found")
+            found = conn.execute(
+                """SELECT prompt, response FROM requests
+                   WHERE conversation_id = ? AND status = 'ok' AND response IS NOT NULL
+                   ORDER BY turn, id""",
+                (conversation_id,),
+            ).fetchall()
+        return [(r["prompt"], r["response"]) for r in found]
+
+    def preview(self, prompt: str, model: str = "auto", effort: str = "auto",
+                conversation_id: int | None = None) -> dict:
+        history = self._history(conversation_id) if conversation_id is not None else []
+        return self._plan(prompt, model, effort, history[-1] if history else None).to_dict(self.cfg)
 
     def run_prompt(self, prompt: str, model: str = "auto", task_id: int | None = None,
-                   system_prompt: str | None = None, effort: str = "auto") -> dict:
+                   system_prompt: str | None = None, effort: str = "auto",
+                   conversation_id: int | None = None) -> dict:
+        """Route and answer one message. Without a conversation_id a new chat is started,
+        so every prompt can be picked up again later."""
         if task_id is not None:
             with connect() as conn:
                 if not conn.execute("SELECT 1 FROM tasks WHERE id = ?", (task_id,)).fetchone():
                     raise ValueError(f"task {task_id} does not exist")
-        plan = self._plan(prompt, model, effort)
+        history = self._history(conversation_id) if conversation_id is not None else []
+        plan = self._plan(prompt, model, effort, history[-1] if history else None)
+        if conversation_id is None:
+            conversation_id = self._create_conversation(prompt)
 
         c = plan.classification
         rec: dict = {
             "created_at": now_iso(),
             "task_id": task_id,
+            "conversation_id": conversation_id,
+            "context_turns": None,
             "prompt": prompt,
             "system_prompt": system_prompt,
             "route_mode": plan.mode,
@@ -79,7 +110,7 @@ class Service:
         notes = list(plan.notes)
 
         try:
-            comp, used, errors = self.router.execute(plan, prompt, system_prompt)
+            comp, used, errors = self.router.execute(plan, prompt, system_prompt, history)
         except ProviderError as e:
             rec["status"] = "error"
             rec["error"] = str(e)
@@ -88,6 +119,9 @@ class Service:
             if used != plan.chosen:
                 rec["fell_back"] = 1
                 notes.append(f"fell back to {self.cfg.label(used)} after: {' | '.join(errors)}")
+            dropped = comp.extra.get("context_dropped") or 0
+            if dropped:
+                notes.append(f"left out the oldest {dropped} {'turn' if dropped == 1 else 'turns'} to fit the context")
             rec.update(
                 response=comp.text,
                 model_key=used,
@@ -101,6 +135,7 @@ class Service:
                 load_ms=comp.load_ms,
                 effort=comp.extra.get("effort"),
                 think=None if comp.extra.get("think") is None else int(comp.extra["think"]),
+                context_turns=comp.extra.get("context_turns"),
             )
             if m.provider == "claude_cli":
                 if comp.cost_usd is not None:
@@ -113,12 +148,126 @@ class Service:
                 rec["avoided_usd"] = reference_cost(self.cfg, comp.input_tokens, comp.output_tokens)
         rec["route_note"] = "; ".join(notes) or None
 
-        cols = ", ".join(rec)
-        marks = ", ".join(f":{k}" for k in rec)
         with connect() as conn:
-            cur = conn.execute(f"INSERT INTO requests ({cols}) VALUES ({marks})", rec)
-            rec_id = cur.lastrowid
+            rec["turn"] = conn.execute(
+                "SELECT COALESCE(MAX(turn), 0) + 1 FROM requests WHERE conversation_id = ?", (conversation_id,)
+            ).fetchone()[0]
+            cols = ", ".join(rec)
+            marks = ", ".join(f":{k}" for k in rec)
+            rec_id = conn.execute(f"INSERT INTO requests ({cols}) VALUES ({marks})", rec).lastrowid
+            conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (rec["created_at"], conversation_id))
         return self.get_request(rec_id) | {"routing": plan.to_dict(self.cfg)}
+
+    def rate(self, rec_id: int, rating: int) -> dict:
+        if rating not in (-1, 0, 1):
+            raise ValueError("rating must be -1, 0 or 1")
+        with connect() as conn:
+            cur = conn.execute("UPDATE requests SET rating = ? WHERE id = ?", (rating or None, rec_id))
+            if cur.rowcount == 0:
+                raise NotFound(f"request {rec_id} not found")
+        return self.get_request(rec_id)
+
+    # Conversations -------------------------------------------------------------
+
+    def _create_conversation(self, first_prompt: str) -> int:
+        ts = now_iso()
+        with connect() as conn:
+            return conn.execute(
+                "INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
+                (make_title(first_prompt), ts, ts),
+            ).lastrowid
+
+    def list_conversations(self, q: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+        where, params = "", []
+        if q and q.strip():
+            like = _like(q.strip())
+            where = """WHERE c.title LIKE ? ESCAPE '\\' OR EXISTS (
+                         SELECT 1 FROM requests x WHERE x.conversation_id = c.id
+                         AND (x.prompt LIKE ? ESCAPE '\\' OR x.response LIKE ? ESCAPE '\\'))"""
+            params = [like, like, like]
+        with connect() as conn:
+            total = conn.execute(f"SELECT COUNT(*) FROM conversations c {where}", params).fetchone()[0]
+            items = rows(conn.execute(
+                f"""SELECT c.id, c.title, c.created_at, c.updated_at,
+                      (SELECT COUNT(*) FROM requests r WHERE r.conversation_id = c.id) AS turns,
+                      (SELECT r.model_key FROM requests r WHERE r.conversation_id = c.id
+                         ORDER BY r.turn DESC, r.id DESC LIMIT 1) AS last_model,
+                      (SELECT r.status FROM requests r WHERE r.conversation_id = c.id
+                         ORDER BY r.turn DESC, r.id DESC LIMIT 1) AS last_status
+                    FROM conversations c {where}
+                    ORDER BY c.updated_at DESC, c.id DESC LIMIT ? OFFSET ?""",
+                [*params, limit, offset],
+            ))
+        return {"total": total, "items": items}
+
+    def get_conversation(self, cid: int) -> dict:
+        with connect() as conn:
+            conv = conn.execute("SELECT * FROM conversations WHERE id = ?", (cid,)).fetchone()
+            if not conv:
+                raise NotFound(f"chat {cid} not found")
+            messages = rows(conn.execute(
+                """SELECT r.*, t.title AS task_title FROM requests r
+                   LEFT JOIN tasks t ON t.id = r.task_id
+                   WHERE r.conversation_id = ? ORDER BY r.turn, r.id""",
+                (cid,),
+            ))
+        return dict(conv) | {"messages": [self._decorate(m) for m in messages]}
+
+    def rename_conversation(self, cid: int, title: str) -> dict:
+        title = " ".join(title.split())
+        if not title:
+            raise ValueError("title can't be empty")
+        with connect() as conn:
+            if conn.execute("UPDATE conversations SET title = ? WHERE id = ?", (title[:200], cid)).rowcount == 0:
+                raise NotFound(f"chat {cid} not found")
+        return self.get_conversation(cid)
+
+    def delete_conversation(self, cid: int) -> None:
+        """Deletes the chat and its turns, so they also leave the request log and stats."""
+        with connect() as conn:
+            if conn.execute("DELETE FROM conversations WHERE id = ?", (cid,)).rowcount == 0:
+                raise NotFound(f"chat {cid} not found")
+
+    # Export --------------------------------------------------------------------
+
+    EXPORT_FIELDS = (
+        "turn", "created_at", "prompt", "response", "status", "error", "task_type", "complexity",
+        "reasoning", "classifier_source", "rule", "routed_model", "model_key", "provider",
+        "provider_model", "effort", "effort_source", "think", "fell_back", "context_turns",
+        "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "latency_ms",
+        "cost_usd", "rating",
+    )
+
+    def export(self, fmt: str = "conversations") -> Iterator[str]:
+        """JSON Lines. "conversations" is one chat per line with its turns. "turns" is one turn per
+        line with the routing decision, the outcome and the previous turn, for training a router."""
+        if fmt not in ("conversations", "turns"):
+            raise ValueError("format must be conversations or turns")
+        with connect() as conn:
+            convs = rows(conn.execute("SELECT * FROM conversations ORDER BY id"))
+            turns = rows(conn.execute(
+                f"SELECT conversation_id, {', '.join(self.EXPORT_FIELDS)} FROM requests "
+                "WHERE conversation_id IS NOT NULL ORDER BY conversation_id, turn, id"
+            ))
+        by_conv: dict[int, list[dict]] = {}
+        for t in turns:
+            by_conv.setdefault(t["conversation_id"], []).append(t)
+
+        for conv in convs:
+            items = by_conv.get(conv["id"], [])
+            if fmt == "conversations":
+                msgs = [{k: v for k, v in t.items() if k != "conversation_id"} for t in items]
+                yield json.dumps(conv | {"turns": msgs}, ensure_ascii=False) + "\n"
+                continue
+            prev_ok: dict | None = None
+            for t in items:
+                yield json.dumps(t | {
+                    "conversation_title": conv["title"],
+                    "previous_prompt": prev_ok["prompt"] if prev_ok else None,
+                    "previous_model": prev_ok["model_key"] if prev_ok else None,
+                }, ensure_ascii=False) + "\n"
+                if t["status"] == "ok":
+                    prev_ok = t
 
     # Requests ------------------------------------------------------------------
 
@@ -144,13 +293,16 @@ class Service:
             total = conn.execute(f"SELECT COUNT(*) FROM requests r {clause}", params).fetchone()[0]
             items = rows(conn.execute(
                 f"""SELECT r.id, r.created_at, r.task_id, t.title AS task_title,
+                           r.conversation_id, r.turn, c.title AS conversation_title, r.rating,
                            substr(r.prompt, 1, 200) AS prompt_preview, r.status, r.error, r.route_mode,
                            r.task_type, r.complexity, r.reasoning, r.effort, r.effort_source, r.think,
                            r.classifier_source, r.rule, r.routed_model,
                            r.model_key, r.provider, r.fell_back, r.route_note, r.input_tokens,
                            r.output_tokens, r.cache_read_tokens, r.cache_write_tokens,
                            r.latency_ms, r.cost_usd, r.avoided_usd
-                    FROM requests r LEFT JOIN tasks t ON t.id = r.task_id
+                    FROM requests r
+                    LEFT JOIN tasks t ON t.id = r.task_id
+                    LEFT JOIN conversations c ON c.id = r.conversation_id
                     {clause} ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?""",
                 [*params, limit, offset],
             ))
@@ -159,8 +311,10 @@ class Service:
     def get_request(self, rec_id: int) -> dict:
         with connect() as conn:
             row = conn.execute(
-                """SELECT r.*, t.title AS task_title FROM requests r
-                   LEFT JOIN tasks t ON t.id = r.task_id WHERE r.id = ?""",
+                """SELECT r.*, t.title AS task_title, c.title AS conversation_title FROM requests r
+                   LEFT JOIN tasks t ON t.id = r.task_id
+                   LEFT JOIN conversations c ON c.id = r.conversation_id
+                   WHERE r.id = ?""",
                 (rec_id,),
             ).fetchone()
         if not row:

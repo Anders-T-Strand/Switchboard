@@ -6,7 +6,10 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
+from datetime import date
+
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -24,12 +27,22 @@ class PromptIn(BaseModel):
     effort: str = "auto"
     task_id: int | None = None
     system_prompt: str | None = None
+    conversation_id: int | None = None  # continue this chat. Leave out to start a new one.
 
 
 class PreviewIn(BaseModel):
     prompt: str = Field(min_length=1, max_length=500_000)
     model: str = "auto"
     effort: str = "auto"
+    conversation_id: int | None = None
+
+
+class RenameIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+class RatingIn(BaseModel):
+    rating: int  # 1 good, -1 bad, 0 clears
 
 
 class TaskIn(BaseModel):
@@ -81,16 +94,74 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
     @app.post("/api/prompt")
     def run_prompt(body: PromptIn):
         try:
-            return svc.run_prompt(body.prompt, body.model, body.task_id, body.system_prompt, body.effort)
+            return svc.run_prompt(body.prompt, body.model, body.task_id, body.system_prompt,
+                                  body.effort, body.conversation_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        except NotFound as e:
+            not_found(e)
 
     @app.post("/api/route/preview")
     def preview(body: PreviewIn):
         try:
-            return svc.preview(body.prompt, body.model, body.effort)
+            return svc.preview(body.prompt, body.model, body.effort, body.conversation_id)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        except NotFound as e:
+            not_found(e)
+
+    # Conversations ---------------------------------------------------------------
+
+    @app.get("/api/conversations")
+    def list_conversations(
+        q: str | None = None,
+        limit: int = Query(50, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+    ):
+        return svc.list_conversations(q, limit, offset)
+
+    @app.get("/api/conversations/{cid}")
+    def get_conversation(cid: int):
+        try:
+            return svc.get_conversation(cid)
+        except NotFound as e:
+            not_found(e)
+
+    @app.patch("/api/conversations/{cid}")
+    def rename_conversation(cid: int, body: RenameIn):
+        try:
+            return svc.rename_conversation(cid, body.title)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except NotFound as e:
+            not_found(e)
+
+    @app.delete("/api/conversations/{cid}", status_code=204)
+    def delete_conversation(cid: int):
+        try:
+            svc.delete_conversation(cid)
+        except NotFound as e:
+            not_found(e)
+
+    @app.put("/api/requests/{rec_id}/rating")
+    def rate(rec_id: int, body: RatingIn):
+        try:
+            return svc.rate(rec_id, body.rating)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except NotFound as e:
+            not_found(e)
+
+    @app.get("/api/export.jsonl")
+    def export(format: str = "conversations"):
+        if format not in ("conversations", "turns"):
+            raise HTTPException(status_code=400, detail="format must be conversations or turns")
+        name = f"switchboard-{format}-{date.today().isoformat()}.jsonl"
+        return StreamingResponse(
+            svc.export(format),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
 
     # Requests --------------------------------------------------------------------
 

@@ -22,7 +22,7 @@ claude:
   disallowed_tools: [Bash, Edit, MultiEdit, Write, NotebookEdit]
   extra_args: []         # anything else to pass to claude -p, e.g. ["--strict-mcp-config"]
   system_prompt: >-
-    You are answering a single question sent from a personal dashboard.
+    You are chatting with the user through their personal dashboard.
     Answer directly and completely. Use Markdown where it helps.
   logs_dir: null         # defaults to CLAUDE_CONFIG_DIR, then ~/.claude
   sync_interval_s: 60    # how often Claude Code session logs are read for usage stats
@@ -33,10 +33,12 @@ models:
     provider: ollama
     model: qwen3.6:35b-a3b
     label: Qwen3.6 35B-A3B
+    options: {num_ctx: 16384}  # room for chat history. Lower it if the model spills out of VRAM.
   qwen-dense:
     provider: ollama
     model: qwen3.8:27b
     label: Qwen3.8 27B
+    options: {num_ctx: 16384}
   claude-haiku:
     provider: claude_cli
     model: haiku
@@ -101,6 +103,13 @@ routing:
     #   max_effort: medium
     - name: default
       model: qwen-moe
+
+# Chats: how much earlier conversation goes along with each new message.
+chat:
+  history_chars:
+    ollama: 24000        # about 7K tokens, keep well under num_ctx so the answer still fits
+    claude_cli: 150000
+  classifier_context_chars: 800   # how much of the previous exchange the classifier sees
 
 # USD per million tokens (Claude API list prices, Oct 2026). Used for API-equivalent cost
 # estimates only. Your Pro plan isn't billed per token, so treat these as "what this would

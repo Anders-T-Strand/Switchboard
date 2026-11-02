@@ -35,7 +35,7 @@ FAKE_CLAUDE = textwrap.dedent(
         sys.exit(1)
     print(json.dumps({
         "type": "result", "subtype": "success", "is_error": False,
-        "result": f"claude[{model}] answer. key_present={'ANTHROPIC_API_KEY' in os.environ} system_prompt={bool(sp)} effort={os.environ.get('CLAUDE_CODE_EFFORT_LEVEL')} prompt={prompt!r}",
+        "result": f"claude[{model}] answer. key_present={'ANTHROPIC_API_KEY' in os.environ} system_prompt={bool(sp)} effort={os.environ.get('CLAUDE_CODE_EFFORT_LEVEL')} history={sp.count('<turn role="user">')} prompt={prompt!r}",
         "session_id": "s1", "num_turns": 1, "total_cost_usd": 0.0123,
         "usage": {"input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 50},
         "modelUsage": {

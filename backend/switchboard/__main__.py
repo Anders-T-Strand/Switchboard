@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     ask.add_argument("--model", default="auto", help="model key from config.yaml, or auto")
     ask.add_argument("--effort", default="auto", help="low, medium, high, xhigh, max, or auto")
     ask.add_argument("--task", type=int, help="attach the request to a task id")
+    ask.add_argument("--chat", help='continue a chat: its id, or "last" for the most recent one')
     ask.add_argument("--json", action="store_true", help="print the full JSON response")
 
     sub.add_parser("sync", help="read Claude Code logs once and print a summary")
@@ -86,16 +87,27 @@ def main(argv: list[str] | None = None) -> int:
 
         prompt = sys.stdin.read() if args.prompt == ["-"] else " ".join(args.prompt)
         host = "127.0.0.1" if cfg.server.host in ("0.0.0.0", "::") else cfg.server.host
-        url = f"http://{host}:{cfg.server.port}/api/prompt"
+        base = f"http://{host}:{cfg.server.port}"
+        url = f"{base}/api/prompt"
         try:
+            chat_id = None
+            if args.chat == "last":
+                latest = httpx.get(f"{base}/api/conversations", params={"limit": 1}, timeout=10).json()["items"]
+                chat_id = latest[0]["id"] if latest else None
+            elif args.chat:
+                chat_id = int(args.chat)
             r = httpx.post(
                 url,
-                json={"prompt": prompt, "model": args.model, "effort": args.effort, "task_id": args.task},
+                json={"prompt": prompt, "model": args.model, "effort": args.effort, "task_id": args.task,
+                      "conversation_id": chat_id},
                 timeout=None,
             )
         except httpx.HTTPError as e:
             print(f"Could not reach the server at {url}. Is it running? ({e})", file=sys.stderr)
             return 1
+        except ValueError:
+            print('--chat takes a chat id or "last"', file=sys.stderr)
+            return 2
         data = r.json()
         if r.status_code != 200:
             print(f"Error: {data.get('detail', data)}", file=sys.stderr)
@@ -119,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{' | '.join(bits)}]", file=sys.stderr)
         if data.get("route_note"):
             print(f"[{data['route_note']}]", file=sys.stderr)
+        print(f"[chat {data.get('conversation_id')}, turn {data.get('turn')}: {data.get('conversation_title')}. "
+              f"Continue with --chat {data.get('conversation_id')}]", file=sys.stderr)
         if data.get("status") != "ok":
             print(f"Error: {data.get('error')}", file=sys.stderr)
             return 1
