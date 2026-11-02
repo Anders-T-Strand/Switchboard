@@ -12,6 +12,29 @@ export type Classification = {
   ms: number;
 };
 
+export type Neighbor = {
+  request_id: number;
+  score: number;
+  conversation_id: number | null;
+  turn: number | null;
+  title: string | null;
+  prompt: string;
+  model_key: string | null;
+  effort: Effort | null;
+  rating: number | null;
+  created_at: string;
+};
+
+export type MemoryRef = {
+  request_id: number;
+  conversation_id: number;
+  turn: number;
+  title: string | null;
+  score: number;
+};
+
+export type Learned = { from: string; to: string; direction: "up" | "down"; reason: string };
+
 export type RoutePlan = {
   mode: "auto" | "forced";
   chosen: string;
@@ -24,6 +47,8 @@ export type RoutePlan = {
   effort_source: "forced" | "rule" | "reasoning" | null;
   effort: Effort | null;
   think: boolean | null;
+  neighbors: Neighbor[];
+  learned: Learned | null;
   chosen_label: string;
   routed_label: string;
 };
@@ -75,6 +100,8 @@ export type RequestDetail = Omit<RequestRow, "prompt_preview"> & {
   provider_model: string | null;
   load_ms: number | null;
   context_turns: number | null;
+  neighbors: Neighbor[];
+  memory: MemoryRef[];
   routing?: RoutePlan;
 };
 
@@ -84,13 +111,16 @@ export type ConversationSummary = {
   created_at: string;
   updated_at: string;
   turns: number;
+  memory: number;
   last_model: string | null;
   last_status: "ok" | "error" | null;
+  match?: "meaning" | "words" | "both";
 };
 
 export type Conversation = {
   id: number;
   title: string;
+  memory: number;
   created_at: string;
   updated_at: string;
   messages: RequestDetail[];
@@ -189,6 +219,21 @@ export type Status = {
   claude: { found: boolean; path: string | null; version: string | null; use_subscription: boolean; logs_root: string };
   sync: SyncState;
   models: ModelStatus[];
+  index: IndexStatus;
+};
+
+export type IndexStatus = {
+  enabled: boolean;
+  ok?: boolean | null;
+  reason?: string | null;
+  checked_at?: string | null;
+  where?: string;
+  collection?: string;
+  embed_model?: string;
+  dim?: number | null;
+  turns?: number;
+  indexed?: number;
+  pending?: number;
 };
 
 export type SyncState = {
@@ -223,6 +268,7 @@ export type ConfigView = {
     prefer_loaded_local: boolean;
     fallback_order: string[];
     effort: { by_reasoning: Record<string, Effort> };
+    learn: { enabled: boolean; ladder: string[]; neighbors: number; min_similarity: number; min_votes: number };
     rules: Rule[];
   };
   pricing: {
@@ -230,6 +276,13 @@ export type ConfigView = {
     models: Record<string, { match: string; input: number; output: number; cache_read: number; cache_write: number }>;
   };
   efforts: Effort[];
+  index: {
+    enabled: boolean;
+    qdrant: { url: string | null; path: string | null; collection: string };
+    embedding: { model: string; max_chars: number; instructions: boolean };
+    search_min_score: number;
+  };
+  memory: { max_items: number; min_score: number; max_chars: number };
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -266,6 +319,7 @@ export const api = {
     effort: string;
     task_id: number | null;
     conversation_id: number | null;
+    memory?: boolean;
     system_prompt?: string | null;
   }) =>
     request<RequestDetail>("/api/prompt", { method: "POST", body: json(body) }),
@@ -282,12 +336,15 @@ export const api = {
   request: (id: number) => request<RequestDetail>(`/api/requests/${id}`),
 
   conversations: (q = "", limit = 100) =>
-    request<{ total: number; items: ConversationSummary[] }>(
+    request<{ total: number; items: ConversationSummary[]; search: "meaning and words" | "words" | null }>(
       `/api/conversations?${new URLSearchParams({ q, limit: String(limit) })}`,
     ),
   conversation: (id: number) => request<Conversation>(`/api/conversations/${id}`),
   renameConversation: (id: number, title: string) =>
     request<Conversation>(`/api/conversations/${id}`, { method: "PATCH", body: json({ title }) }),
+  setMemory: (id: number, memory: boolean) =>
+    request<Conversation>(`/api/conversations/${id}`, { method: "PATCH", body: json({ memory }) }),
+  rebuildIndex: () => request<IndexStatus>("/api/index/rebuild", { method: "POST" }),
   deleteConversation: (id: number) => request<void>(`/api/conversations/${id}`, { method: "DELETE" }),
   rate: (id: number, rating: -1 | 0 | 1) =>
     request<RequestDetail>(`/api/requests/${id}/rating`, { method: "PUT", body: json({ rating }) }),

@@ -7,6 +7,7 @@ import { useApp } from "../hooks";
 export function Models({ onSynced }: { onSynced: () => void }) {
   const { config, status, label } = useApp();
   const [syncing, setSyncing] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!config || !status) return <p className="muted">Loading…</p>;
@@ -188,6 +189,80 @@ export function Models({ onSynced }: { onSynced: () => void }) {
               </div>
             </dl>
           </Panel>
+
+          {status.index?.enabled && (
+            <Panel
+              title="Vector index"
+              sub="Every answered turn, embedded and stored in Qdrant"
+              actions={
+                <button
+                  className="ghost small"
+                  disabled={rebuilding}
+                  onClick={async () => {
+                    if (!window.confirm("Drop the Qdrant collection and index every turn again?")) return;
+                    setRebuilding(true);
+                    setError(null);
+                    try {
+                      await api.rebuildIndex();
+                      onSynced();
+                    } catch (e) {
+                      setError((e as Error).message);
+                    } finally {
+                      setRebuilding(false);
+                    }
+                  }}
+                >
+                  {rebuilding ? "Starting…" : "Re-index everything"}
+                </button>
+              }
+            >
+              <dl className="facts">
+                <div>
+                  <dt>Qdrant</dt>
+                  <dd>
+                    <Light on={status.index.ok === true || status.index.ok === false} warn={status.index.ok === false}>
+                      {status.index.ok === false ? status.index.reason : status.index.where}
+                    </Light>
+                    <span className="muted block">Collection {status.index.collection}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Embeddings</dt>
+                  <dd>
+                    <code>{status.index.embed_model}</code>
+                    {status.index.dim ? <span className="muted">, {status.index.dim} dimensions</span> : null}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Indexed</dt>
+                  <dd>
+                    {int(status.index.indexed ?? 0)} of {int(status.index.turns ?? 0)} answered turns
+                    {status.index.pending ? <span className="muted">, {int(status.index.pending)} waiting</span> : null}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Learning</dt>
+                  <dd>
+                    {r.learn.enabled && r.learn.ladder.length ? (
+                      <>
+                        Moves along {r.learn.ladder.map(label).join(", then ")} once {r.learn.min_votes} similar
+                        prompts (similarity {r.learn.min_similarity} or more) were rated
+                      </>
+                    ) : (
+                      "Off"
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Memory</dt>
+                  <dd>
+                    Up to {config.memory.max_items} related turns from other chats, similarity {config.memory.min_score}{" "}
+                    or more, when a chat has Memory turned on
+                  </dd>
+                </div>
+              </dl>
+            </Panel>
+          )}
 
           <Panel
             title="Claude Code logs"

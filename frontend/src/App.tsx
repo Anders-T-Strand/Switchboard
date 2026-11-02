@@ -87,6 +87,15 @@ export default function App() {
               Ollama{st?.ollama.reachable ? (loaded.length ? `, ${loaded.join(", ")} loaded` : ", nothing loaded") : " offline"}
             </Light>
             <Light on={!!st?.claude.found}>{st?.claude.found ? "Claude Code ready" : "Claude Code not found"}</Light>
+            {st?.index?.enabled && (
+              <Light on={st.index.ok === true || st.index.ok === false} warn={st.index.ok === false}>
+                {st.index.ok === false
+                  ? "Qdrant unavailable"
+                  : st.index.ok
+                    ? `Qdrant, ${(st.index.indexed ?? 0).toLocaleString()} turns indexed${st.index.pending ? `, ${st.index.pending} to go` : ""}`
+                    : "Qdrant, connecting"}
+              </Light>
+            )}
           </div>
         </nav>
 

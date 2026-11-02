@@ -105,6 +105,7 @@ def test_list_search_rename_delete(client):
     assert [c["id"] for c in client.get("/api/conversations?q=postgres").json()["items"]] == [a]
     assert [c["id"] for c in client.get("/api/conversations?q=lifetimes").json()["items"]] == [b]  # matches a turn
     assert client.get("/api/conversations?q=100%").json()["total"] == 0  # % is literal
+    assert [c["id"] for c in client.get("/api/conversations?q=autovacuum tune").json()["items"]] == [a]  # any order
 
     renamed = client.patch(f"/api/conversations/{a}", json={"title": "  Postgres   tuning "}).json()
     assert renamed["title"] == "Postgres tuning"

@@ -1,4 +1,5 @@
-import type { RequestDetail, RoutePlan } from "../api";
+import { ThumbsDown, ThumbsUp } from "lucide-react";
+import type { MemoryRef, Neighbor, RequestDetail, RoutePlan } from "../api";
 import { capitalize, compact, duration, effortLabel, usd } from "../format";
 import { useApp } from "../hooks";
 import { ModelTag } from "./bits";
@@ -19,6 +20,8 @@ export type RouteView = {
   effortSource: string | null;
   think: boolean | null;
   note: string | null;
+  neighbors: Neighbor[];
+  memory: MemoryRef[];
 };
 
 export function fromPlan(p: RoutePlan): RouteView {
@@ -39,6 +42,8 @@ export function fromPlan(p: RoutePlan): RouteView {
     effortSource: p.effort_source,
     think: p.think,
     note: p.notes.join("; ") || null,
+    neighbors: p.neighbors ?? [],
+    memory: [],
   };
 }
 
@@ -59,6 +64,8 @@ export function fromDetail(d: RequestDetail): RouteView {
     effortSource: d.effort_source,
     think: d.think === null || d.think === undefined ? null : Boolean(d.think),
     note: d.route_note,
+    neighbors: d.neighbors ?? [],
+    memory: d.memory ?? [],
   };
 }
 
@@ -119,6 +126,24 @@ export function RouteSteps({ view, pending = false }: { view: RouteView; pending
           )}
         </span>
       </li>
+      {view.neighbors.length > 0 && (
+        <li>
+          <span className="step-name">Similar</span>
+          <span>
+            <span className="muted">Closest past prompts, and how you rated their answers</span>
+            <ul className="neighbors">
+              {view.neighbors.slice(0, 3).map((n) => (
+                <li key={n.request_id}>
+                  <span className="nb-score" title="Cosine similarity">{n.score.toFixed(2)}</span>
+                  <ModelTag modelKey={n.model_key} />
+                  <Rated rating={n.rating} />
+                  <a className="nb-prompt" href={`#/console?c=${n.conversation_id}`} title={n.prompt}>{n.prompt}</a>
+                </li>
+              ))}
+            </ul>
+          </span>
+        </li>
+      )}
       <li>
         <span className="step-name">Effort</span>
         <span>
@@ -126,6 +151,20 @@ export function RouteSteps({ view, pending = false }: { view: RouteView; pending
           {why && <span className="muted">, {why}</span>}
         </span>
       </li>
+      {view.memory.length > 0 && (
+        <li>
+          <span className="step-name">Memory</span>
+          <span>
+            {view.memory.length === 1 ? "1 turn" : `${view.memory.length} turns`} from other chats went along:{" "}
+            {view.memory.map((m, i) => (
+              <span key={m.request_id}>
+                {i > 0 && ", "}
+                <a href={`#/console?c=${m.conversation_id}`}>{m.title ?? `chat ${m.conversation_id}`}</a>
+              </span>
+            ))}
+          </span>
+        </li>
+      )}
       <li>
         <span className="step-name">{pending ? "Will answer" : "Answered"}</span>
         <span>
@@ -135,6 +174,12 @@ export function RouteSteps({ view, pending = false }: { view: RouteView; pending
       </li>
     </ol>
   );
+}
+
+function Rated({ rating }: { rating: number | null }) {
+  if (rating === 1) return <ThumbsUp size={13} className="rated good" aria-label="rated good" />;
+  if (rating === -1) return <ThumbsDown size={13} className="rated bad" aria-label="rated bad" />;
+  return <span className="muted small">not rated</span>;
 }
 
 export function UsageLine({ d }: { d: RequestDetail }) {

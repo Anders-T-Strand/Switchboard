@@ -231,18 +231,29 @@ class Service:
         searched_meaning = self.index is not None and self.index.ready()
         if searched_meaning:
             by_meaning = [cid for cid, _ in self.index.search_conversations(q)]
-        like = _like(q)
+        # Every word has to appear somewhere in the chat (title or any turn), in any order.
+        words = [w for w in q.split() if len(w) > 1][:8] or [q]
+        conds, params = [], []
+        for w in words:
+            like = _like(w)
+            conds.append("""(c.title LIKE ? ESCAPE '\\' OR EXISTS (
+                     SELECT 1 FROM requests x WHERE x.conversation_id = c.id
+                     AND (x.prompt LIKE ? ESCAPE '\\' OR x.response LIKE ? ESCAPE '\\')))""")
+            params += [like, like, like]
         with connect() as conn:
             by_words = [r[0] for r in conn.execute(
-                """SELECT c.id FROM conversations c
-                   WHERE c.title LIKE ? ESCAPE '\\' OR EXISTS (
-                     SELECT 1 FROM requests x WHERE x.conversation_id = c.id
-                     AND (x.prompt LIKE ? ESCAPE '\\' OR x.response LIKE ? ESCAPE '\\'))
-                   ORDER BY c.updated_at DESC, c.id DESC""",
-                (like, like, like),
+                f"""SELECT c.id FROM conversations c WHERE {' AND '.join(conds)}
+                    ORDER BY c.updated_at DESC, c.id DESC""",
+                params,
             )]
-        meaning_set = set(by_meaning)
-        ordered = by_meaning + [cid for cid in by_words if cid not in meaning_set]
+        # Reciprocal rank fusion: a chat's score is the sum of 1 / (60 + rank) over both lists,
+        # so chats that match by meaning and by words rise to the top, and neither list drowns the other.
+        fused: dict[int, float] = {}
+        for ranked in (by_meaning, by_words):
+            for rank, cid in enumerate(ranked):
+                fused[cid] = fused.get(cid, 0.0) + 1.0 / (60 + rank)
+        meaning_set, words_set = set(by_meaning), set(by_words)
+        ordered = sorted(fused, key=lambda cid: -fused[cid])
         page = ordered[offset: offset + limit]
         found: dict[int, dict] = {}
         if page:
@@ -250,7 +261,8 @@ class Service:
                 for r in rows(conn.execute(
                     f"{self._SUMMARY} WHERE c.id IN ({','.join('?' * len(page))})", page
                 )):
-                    found[r["id"]] = r | {"match": "meaning" if r["id"] in meaning_set else "words"}
+                    in_m, in_w = r["id"] in meaning_set, r["id"] in words_set
+                    found[r["id"]] = r | {"match": "both" if in_m and in_w else "meaning" if in_m else "words"}
         return {
             "total": len(ordered),
             "items": [found[cid] for cid in page if cid in found],

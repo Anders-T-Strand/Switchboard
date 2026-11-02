@@ -131,7 +131,7 @@ def test_search_by_meaning_then_words(app):
     assert res["search"] == "meaning and words"
     ids = [i["id"] for i in res["items"]]
     assert ids[0] == a and b not in ids
-    assert res["items"][0]["match"] == "meaning"
+    assert res["items"][0]["match"] == "both"  # matched by meaning and by words
     # Before the index is ready, search falls back to words only.
     app.svc.index.state["ok"] = None
     res = app.get("/api/conversations?q=autovacuum").json()

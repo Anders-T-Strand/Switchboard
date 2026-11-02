@@ -39,10 +39,36 @@ Every prompt belongs to a chat, including ones sent from the terminal, so any ea
 
 - **Each turn is routed on its own.** The classifier sees the previous exchange, so a short follow-up like "why?" or "make it shorter" is rated as hard as the work it refers to instead of as trivial.
 - **History travels with the model.** Local models get earlier turns as chat messages. Claude gets them as a transcript in its system prompt, which works even when earlier replies came from Qwen. The oldest turns are left out first once a chat outgrows `chat.history_chars`, and the route note says when that happened.
-- **Rate answers.** Thumbs up or down on each answer. The ratings are counted per model on the Overview and are what a smarter router will learn from.
+- **Rate answers.** Thumbs up or down on each answer. The ratings are counted per model on the Overview, and the router learns from them (see below).
 - **Download the history.** The chat list links to two JSON Lines files: whole chats, and one line per turn with the routing decision, the outcome, the previous prompt and your rating.
 
 Prompts sent before chats existed were turned into one-turn chats the first time the server started, so they can be continued too.
+
+## Vector index (Qdrant)
+
+Every answered turn is embedded through Ollama (`qwen3-embedding:0.6b` by default) and stored in [Qdrant](https://qdrant.tech). SQLite stays the record and Qdrant holds the vectors, so the index can always be rebuilt from SQLite. Each turn is one point with two named vectors: the prompt alone, and the prompt with its answer. A background thread indexes turns as they're saved, catches up on history the first time it runs, and re-indexes everything if you switch embedding model.
+
+The index is used for three things:
+
+- **Search by meaning.** Chat search ranks chats by meaning and by matching words together (reciprocal rank fusion), so "that vacuum thing in Postgres" finds the autovacuum chat.
+- **A router that learns from your ratings.** Each new prompt is compared with past prompts. If the routed model's answers to similar prompts were mostly rated bad (at least `min_votes` of them), the prompt moves up `routing.learn.ladder`, for example from Qwen to Sonnet. If a cheaper model's answers to similar prompts were rated good and none bad, it moves down. "How it was routed" lists the closest past prompts with their ratings, and the answer is tagged when ratings changed the route. It only acts on ratings, so it does nothing until you rate some answers.
+- **Memory.** Turn on Memory for a chat in the Console, and each message brings up to four related turns from your other chats into the system prompt, for local models and Claude alike. The answer is tagged with how many it used, and "How it was routed" links to them.
+
+### Running Qdrant
+
+```powershell
+ollama pull qwen3-embedding:0.6b
+```
+
+Then pick one:
+
+- **Docker Desktop (easiest).** `.\switchboard` starts a `switchboard-qdrant` container when Qdrant isn't already running, storing data in a named Docker volume. Qdrant warns that mounting a Windows folder can lose data, which the named volume avoids. To run it yourself: `docker run -d --name switchboard-qdrant --restart unless-stopped -p 6333:6333 -v switchboard_qdrant:/qdrant/storage qdrant/qdrant`
+- **Native Windows build.** Download `qdrant-x86_64-pc-windows-msvc.zip` from [Qdrant's releases](https://github.com/qdrant/qdrant/releases), unzip it and run `qdrant.exe`. It listens on port 6333 and keeps its data in a `storage` folder next to it.
+- **No server.** In `config.yaml`, remove `index.qdrant.url` and set `index.qdrant.path: data/qdrant`. The Qdrant client then stores everything in that folder itself. Fine for one person, slower than the server.
+
+The sidebar shows how many turns are indexed. Without Qdrant or the embedding model, everything else keeps working and search falls back to matching words. The Models page shows the index status and has a button to re-index everything.
+
+The embedding model is small (about 640 MB) and stays loaded next to your chat model.
 
 ## What it tracks
 
@@ -127,6 +153,9 @@ Everything lives in `config.yaml`. Restart the server after editing it.
 |---|---|
 | `models` | Every model the router can use. `provider` is `ollama` or `claude_cli`. For Claude, `model` is the alias passed to `claude --model` and `max_effort` caps its effort. For Ollama, `think` pins thinking on or off. |
 | `routing.rules` | Ordered rules. Conditions: `task_types`, `min_complexity`, `max_complexity`, `min_reasoning`, `max_reasoning`. Effort: `effort` to pin it, `min_effort` and `max_effort` to clamp it. |
+| `index` | Qdrant location, collection, embedding model and how much text per turn gets embedded. `enabled: false` turns the vector index off. |
+| `routing.learn` | The model ladder for learning from ratings, how many similar prompts to look at, how close they must be, and how many ratings it takes to move. |
+| `chat.memory` | How many turns from other chats a message can bring in, and how related they must be. |
 | `chat.history_chars` | How many characters of earlier conversation go along with each message, per provider. Keep the Ollama budget well under the `num_ctx` set on local models (16384 tokens by default). |
 | `routing.effort.by_reasoning` | Which effort level each reasoning rating gets. Leave a level out to use your own `/effort` setting for it. |
 | `routing.classifier` | Which local model classifies, and whether it may use whatever is already loaded. |
@@ -167,7 +196,6 @@ frontend/src/      React + Vite dashboard
 
 ## Ideas for later
 
-- Index every turn in a vector store so chats can be searched by meaning, and so the router can look at how similar past prompts were answered and rated
-- Train a router on the rated turns and compare it against the classifier
+- Train a router on the rated turns (the Qdrant vectors make good features) and compare it against the classifier and the rating-based ladder
 - Stream answers as they're generated
 - Re-run a turn on a different model to compare answers

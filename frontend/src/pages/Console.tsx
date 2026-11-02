@@ -12,7 +12,7 @@ function chatIdFromHash(): number | null {
 }
 
 export function Console() {
-  const { modelKeys, label, config } = useApp();
+  const { modelKeys, label, config, status } = useApp();
   const [chatId, setChatId] = useState<number | null>(chatIdFromHash);
   const chatIdRef = useRef(chatId);
   chatIdRef.current = chatId;
@@ -22,6 +22,7 @@ export function Console() {
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState("auto");
   const [effort, setEffort] = useState("auto");
+  const [newChatMemory, setNewChatMemory] = useState(false);
   const [taskId, setTaskId] = useState("");
   const [preview, setPreview] = useState<RoutePlan | null>(null);
   const [busy, setBusy] = useState<"send" | "preview" | null>(null);
@@ -99,6 +100,7 @@ export function Console() {
         effort,
         task_id: taskId ? Number(taskId) : null,
         conversation_id: target,
+        memory: target === null ? newChatMemory : undefined,
       });
       if (target !== null) {
         setConv((cur) => (cur && cur.id === r.conversation_id ? { ...cur, messages: [...cur.messages, r] } : cur));
@@ -131,6 +133,20 @@ export function Console() {
     }
   }
 
+  async function toggleMemory(on: boolean) {
+    if (!conv) {
+      setNewChatMemory(on);
+      return;
+    }
+    try {
+      await api.setMemory(conv.id, on);
+      setConv((cur) => (cur && cur.id === conv.id ? { ...cur, memory: on ? 1 : 0 } : cur));
+      list.reload();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function rate(m: RequestDetail, value: -1 | 1) {
     const next = m.rating === value ? 0 : value;
     try {
@@ -151,6 +167,8 @@ export function Console() {
   }
 
   const openTasks = (tasks.data ?? []).filter((t) => t.status !== "done");
+  const indexOn = status?.index?.enabled ?? false;
+  const memoryOn = conv ? Boolean(conv.memory) : newChatMemory;
   const items = list.data?.items ?? [];
   const showEmpty = !conv && !pending && !loadingConv;
 
@@ -252,6 +270,12 @@ export function Console() {
                 ))}
               </select>
             </label>
+            {indexOn && (
+              <label className="toggle" title="Adds related turns from your other chats to each message in this chat">
+                <input type="checkbox" checked={memoryOn} onChange={(e) => toggleMemory(e.target.checked)} />
+                Memory
+              </label>
+            )}
             <div className="composer-actions">
               <button
                 type="button"
@@ -282,6 +306,13 @@ export function Console() {
           <span className="sr-only">Search chats</span>
           <input type="search" placeholder="Search chats" value={query} onChange={(e) => setQuery(e.target.value)} />
         </label>
+        {search && list.data?.search && (
+          <p className="search-note">
+            {list.data.search === "words"
+              ? "Matching words only. Search by meaning needs the vector index."
+              : "Ranked by meaning and by matching words together"}
+          </p>
+        )}
         <ul>
           {items.map((c) => (
             <li key={c.id}>
@@ -387,7 +418,11 @@ function Turn({ m, busy, onRate, onRetry }: {
   onRetry: (prompt: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const routeRef = useRef<HTMLDivElement>(null);
   const { config } = useApp();
+  useEffect(() => {
+    if (open) routeRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [open]);
   const provider = m.provider ?? (m.model_key ? config?.models[m.model_key]?.provider : undefined);
   const think = m.think === null || m.think === undefined ? null : Boolean(m.think);
   const effortNote = provider === "ollama" ? effortText(provider, m.effort, think) : m.effort ? `${effortLabel(m.effort)} effort` : null;
@@ -400,6 +435,14 @@ function Turn({ m, busy, onRate, onRetry }: {
           {m.status === "ok" ? <ModelTag modelKey={m.model_key} /> : <span className="error-text">No answer</span>}
           {m.status === "ok" && effortNote && <span className="muted">{effortNote}</span>}
           {m.fell_back ? <span className="flag">fallback</span> : null}
+          {m.memory?.length ? (
+            <span className="flag" title={m.memory.map((x) => x.title).join(", ")}>
+              memory from {m.memory.length === 1 ? "1 chat turn" : `${m.memory.length} chat turns`}
+            </span>
+          ) : null}
+          {m.routing?.learned || /moved (up|down) to/.test(m.route_note ?? "") ? (
+            <span className="flag">routed by your ratings</span>
+          ) : null}
         </div>
         {m.status === "ok" ? <Md>{m.response ?? ""}</Md> : <ErrorNote>{m.error}</ErrorNote>}
         <div className="msg-actions">
@@ -424,7 +467,7 @@ function Turn({ m, busy, onRate, onRetry }: {
           <span className="muted small msg-time">{when(m.created_at)}</span>
         </div>
         {open && (
-          <div className="msg-route">
+          <div className="msg-route" ref={routeRef}>
             <RouteSteps view={fromDetail(m)} />
             {m.status === "ok" && <UsageLine d={m} />}
           </div>
