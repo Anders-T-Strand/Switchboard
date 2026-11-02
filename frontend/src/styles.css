@@ -1480,6 +1480,7 @@ table.rows-clickable tbody tr:hover td {
    bar sticks to the top and the composer to the bottom. */
 @media (min-width: 1101px) {
   .main.main-fill {
+    max-width: none; /* use the whole window, the conversation is centered below */
     height: 100vh;
     height: 100dvh;
     display: flex;
@@ -1494,8 +1495,23 @@ table.rows-clickable tbody tr:hover td {
   .main-fill .chat {
     flex: 1;
     min-height: 0;
+    grid-template-columns: minmax(0, 1fr) 320px;
     grid-template-rows: minmax(0, 1fr);
+    gap: 32px;
     align-items: stretch;
+  }
+  /* The conversation, its title bar and the composer share one centered reading column.
+     The thread itself stays full width so its scrollbar sits at the column's edge. */
+  .main-fill .thread > * {
+    width: 100%;
+    max-width: 960px;
+    margin-inline: auto;
+  }
+  .main-fill .thread-head,
+  .main-fill .chat .composer {
+    width: 100%;
+    max-width: min(960px, calc(100% - 16px)); /* match the thread minus its two scrollbar gutters */
+    margin-inline: auto;
   }
   .main-fill .thread-col {
     min-height: 0;
@@ -1508,8 +1524,8 @@ table.rows-clickable tbody tr:hover td {
   .main-fill .thread {
     min-height: 0;
     overflow-y: auto;
-    scrollbar-gutter: stable;
-    padding: 20px 14px 24px 0;
+    scrollbar-gutter: stable both-edges; /* same space on both sides keeps the column centered */
+    padding: 20px 0 24px;
   }
   .main-fill .chat .composer {
     position: static;
