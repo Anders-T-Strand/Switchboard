@@ -1,10 +1,52 @@
-# AI Dashboard (Switchboard)
+# Switchboard
 
-A local dashboard that routes each prompt to the model best suited to answer it, and keeps track of tokens, cost and tasks along the way.
+[![CI](https://github.com/Anders-T-Strand/AI-Dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/Anders-T-Strand/AI-Dashboard/actions/workflows/ci.yml)
 
-Easy prompts go to a local model running in Ollama. Hard ones go to Claude through Claude Code's headless mode (`claude -p`), which runs on a Claude Pro or Max login instead of API billing. The Console works as a chat: every prompt is saved as part of a conversation you can come back to and continue, with each turn routed on its own. Every turn is logged with how it was classified, which rule picked the model, what it cost in tokens, and what it would have cost at API prices.
+A self-hosted AI console that decides, for every prompt, which model should answer it and how hard that model should think.
+
+Most prompts are answered by a Qwen model running locally through Ollama. The ones that need more go to Claude Sonnet or Opus through Claude Code's headless mode, on a Claude Pro subscription instead of API billing. Every chat is saved and can be picked up later, every turn records why it was routed where it was, and a thumbs up or down on an answer teaches the router which model handles which kind of prompt.
 
 ![Overview](docs/overview.png)
+
+## Highlights
+
+- **Two-axis routing.** A local classifier rates each prompt for complexity (which model) and reasoning (how much thinking) separately, so a prompt can run on Opus at low effort or on Sonnet at extra high.
+- **A router that learns from ratings.** New prompts are matched against rated past prompts in a Qdrant vector index. If a model's answers to similar prompts were rated bad, the prompt moves up a model ladder. If a cheaper model's were rated good, it moves down.
+- **One chat, several models.** A conversation can move between the local model and Claude, with history passed along in the form each one takes, and follow-ups rated in the context of what they refer to.
+- **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
+- **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
+- **Tested and checked.** 80 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
+
+## Architecture
+
+```mermaid
+flowchart TB
+    UI["React dashboard"] <-->|REST| API["FastAPI"]
+    CLI["switchboard ask"] -->|REST| API
+    API --> CL["Classifier<br/>local model already in VRAM"]
+    CL -->|"task type, complexity, reasoning"| RT["Rules, effort map, learning ladder"]
+    QD[("Qdrant<br/>turn vectors")] -.->|"similar rated prompts"| RT
+    RT -->|"model + effort"| OL["Ollama<br/>Qwen on a local GPU"]
+    RT -->|"model + effort"| CC["claude -p<br/>Sonnet or Opus"]
+    OL --> DB[("SQLite<br/>chats, turns, ratings")]
+    CC --> DB
+    LOGS["Claude Code session logs"] -->|"incremental sync"| DB
+    DB -->|"background indexer"| EM["qwen3-embedding"]
+    EM --> QD
+```
+
+## Design decisions
+
+- **Claude through `claude -p`, not the API.** Routed calls run on an existing Pro login, so they cost nothing extra. The CLI's API key variables are stripped from its environment so a stray key can't switch it to API billing. Cost is still shown at API rates, as a measure of what was used.
+- **Built around one GPU.** The classifier runs on whichever local model is already loaded, a loaded model answers instead of swapping in another, and every Ollama call uses the same context size, because Ollama reloads a model when that changes.
+- **Complexity and reasoning are separate ratings.** How capable a model needs to be and how long it should think are different questions. Mapping them to model and effort separately keeps strong models from overthinking easy-but-delicate prompts.
+- **SQLite is the record, Qdrant is derived.** Vectors can be rebuilt at any time. Each indexed turn records which embedding model made it, so changing models re-indexes, and a missing or resized collection is recreated from SQLite.
+- **Learning only acts on explicit ratings.** Copying the classifier's past choices would just reinforce them. Moves need several similar, rated answers, and every move is shown with the prompts and ratings behind it.
+- **History is shaped per provider.** Ollama gets earlier turns as chat messages. Claude gets a transcript in its system prompt, which also covers turns another model answered. Both are trimmed oldest first to a per-provider budget.
+
+## Tech stack
+
+Python 3.11+, FastAPI, SQLite, Qdrant, Ollama, Claude Code CLI. React 19, TypeScript, Vite. pytest, ruff and GitHub Actions.
 
 ## How routing works
 
@@ -26,12 +68,7 @@ Because the model and the effort are picked separately, they combine the way the
 
 Rules can pin the effort (`effort: high`) or clamp it (`min_effort`, `max_effort`), and a Claude model can have its own `max_effort` cap, for example to keep Opus from using too much of your plan. Picking a model or effort in the Console, or with `--model` and `--effort` on the CLI, overrides the router for that prompt.
 
-Two details matter on a single GPU:
-
-- The classifier uses whichever configured local model is already in VRAM, so classifying never triggers a model swap.
-- If a rule picks a local model that isn't loaded but another one is, the loaded model answers. Turn this off with `prefer_loaded_local: false`.
-
-![Request detail](docs/request-detail.png)
+If a rule picks a local model that isn't loaded but another one is, the loaded model answers. Turn this off with `prefer_loaded_local: false`.
 
 ## Chats
 
@@ -81,7 +118,7 @@ The embedding model is small (about 640 MB) and stays loaded next to your chat m
 
 ## Requirements
 
-- Windows 10/11 (macOS and Linux work too)
+- Windows 10/11, macOS or Linux
 - Python 3.11 or newer
 - Node.js 22 LTS (only to build the dashboard)
 - [Ollama](https://ollama.com) with at least one model pulled
@@ -114,6 +151,18 @@ function switchboard { & "C:\path\to\AI-Dashboard\switchboard.cmd" @args }
 ```
 
 If the sidebar says Claude Code wasn't found, run `where.exe claude` in PowerShell. The server also checks `%USERPROFILE%\.local\bin` and `%APPDATA%\npm`, so a fresh install is usually picked up after a restart. Otherwise set `claude.command` in `config.yaml` to the full path of `claude.exe`.
+
+## Setup on macOS and Linux
+
+```bash
+git clone https://github.com/Anders-T-Strand/AI-Dashboard.git
+cd AI-Dashboard
+ollama pull qwen3.6:35b-a3b        # or edit config.yaml to match your models
+ollama pull qwen3-embedding:0.6b
+./start.sh --open
+```
+
+`start.sh` does the same as the Windows launcher: it sets up Python, builds the dashboard when needed, starts Qdrant in Docker if it isn't running, and opens the dashboard.
 
 ### Manual setup
 
@@ -175,9 +224,10 @@ Routed Claude calls count against the same usage limits as your normal Claude an
 ## Development
 
 ```powershell
-# Backend tests (fake Ollama and a fake claude CLI, no network needed)
+# Backend lint and tests (fake Ollama, fake claude CLI and in-process Qdrant, no network needed)
 cd backend
-pip install pytest
+pip install -r requirements.txt pytest ruff
+ruff check switchboard tests
 python -m pytest
 
 # Dashboard with hot reload. API calls proxy to the Python server on :8787
@@ -185,15 +235,21 @@ cd frontend
 npm run dev
 ```
 
+CI runs the same lint and tests on Ubuntu (Python 3.11 and 3.13) and Windows, plus the frontend type check and build.
+
 ```
 backend/switchboard/
-  router.py        classifier prompt, heuristic fallback, rule matching, fallback chain
+  router.py        classifier prompt, heuristic fallback, rules, effort, learning ladder, history shaping
+  index.py         Qdrant indexer, similar-prompt lookup, search and memory
+  service.py       chats, turns, ratings, export, tasks
   providers/       Ollama HTTP client and the claude -p runner
   claude_logs.py   incremental reader for Claude Code session logs
   stats.py         aggregations for the dashboard
-  service.py       request logging and tasks
-  main.py          FastAPI app, serves the built dashboard at /
-frontend/src/      React + Vite dashboard
+  db.py            SQLite schema and migrations
+  config.py        config.yaml models and validation
+  main.py          FastAPI app, background threads, serves the built dashboard at /
+backend/tests/     pytest suite
+frontend/src/      React + TypeScript dashboard
 ```
 
 ## Ideas for later
