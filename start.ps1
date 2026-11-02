@@ -44,7 +44,8 @@ if ($needBuild) {
 }
 
 # Start Qdrant in Docker when config.yaml points the vector index at a local server that isn't running.
-# Uses a named Docker volume, since Qdrant warns that Windows folder mounts can lose data.
+# Uses a named Docker volume, since Qdrant warns that Windows folder mounts can lose data, and only
+# listens on 127.0.0.1 because Qdrant has no login by default.
 $config = Get-Content (Join-Path $root "config.yaml") -Raw
 $qdrant = [regex]::Match($config, '(?m)^\s+url:\s*(http://(?:127\.0\.0\.1|localhost):(\d+))')
 if ($qdrant.Success -and $config -notmatch '(?m)^index:\s*\r?\n\s+enabled:\s*false') {
@@ -62,7 +63,7 @@ if ($qdrant.Success -and $config -notmatch '(?m)^index:\s*\r?\n\s+enabled:\s*fal
             if ($existing) {
                 docker start switchboard-qdrant 2>$null | Out-Null
             } else {
-                docker run -d --name switchboard-qdrant --restart unless-stopped -p "${port}:6333" `
+                docker run -d --name switchboard-qdrant --restart unless-stopped -p "127.0.0.1:${port}:6333" `
                     -v switchboard_qdrant:/qdrant/storage qdrant/qdrant 2>$null | Out-Null
             }
             $ErrorActionPreference = "Stop"

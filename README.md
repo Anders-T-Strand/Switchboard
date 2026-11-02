@@ -62,9 +62,11 @@ ollama pull qwen3-embedding:0.6b
 
 Then pick one:
 
-- **Docker Desktop (easiest).** `.\switchboard` starts a `switchboard-qdrant` container when Qdrant isn't already running, storing data in a named Docker volume. Qdrant warns that mounting a Windows folder can lose data, which the named volume avoids. To run it yourself: `docker run -d --name switchboard-qdrant --restart unless-stopped -p 6333:6333 -v switchboard_qdrant:/qdrant/storage qdrant/qdrant`
+- **Docker Desktop (easiest).** `.\switchboard` starts a `switchboard-qdrant` container when Qdrant isn't already running, storing data in a named Docker volume. Qdrant warns that mounting a Windows folder can lose data, which the named volume avoids. It only listens on 127.0.0.1, since Qdrant has no login by default. To run it yourself: `docker run -d --name switchboard-qdrant --restart unless-stopped -p 127.0.0.1:6333:6333 -v switchboard_qdrant:/qdrant/storage qdrant/qdrant`
 - **Native Windows build.** Download `qdrant-x86_64-pc-windows-msvc.zip` from [Qdrant's releases](https://github.com/qdrant/qdrant/releases), unzip it and run `qdrant.exe`. It listens on port 6333 and keeps its data in a `storage` folder next to it.
 - **No server.** In `config.yaml`, remove `index.qdrant.url` and set `index.qdrant.path: data/qdrant`. The Qdrant client then stores everything in that folder itself. Fine for one person, slower than the server.
+
+To look inside, open http://localhost:6333/dashboard. Each point's id is the request id in SQLite, and its payload holds the model, effort, task type, complexity, reasoning and the start of the prompt. Full text and ratings stay in SQLite.
 
 The sidebar shows how many turns are indexed. Without Qdrant or the embedding model, everything else keeps working and search falls back to matching words. The Models page shows the index status and has a button to re-index everything.
 
