@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS requests (
   route_mode TEXT NOT NULL,          -- auto | forced
   task_type TEXT,
   complexity INTEGER,
+  reasoning INTEGER,
+  effort TEXT,                       -- low | medium | high | xhigh | max, NULL = Claude Code's own setting
+  effort_source TEXT,                -- forced | rule | reasoning
+  think INTEGER,                     -- local models: thinking on (1) or off (0)
   classifier_source TEXT,            -- model | heuristic
   classifier_model TEXT,
   classifier_reason TEXT,
@@ -76,6 +80,16 @@ CREATE TABLE IF NOT EXISTS cc_files (
 );
 """
 
+# Columns added after the first release. init_db adds any that an existing database lacks.
+ADDED_COLUMNS = {
+    "requests": [
+        ("reasoning", "INTEGER"),
+        ("effort", "TEXT"),
+        ("effort_source", "TEXT"),
+        ("think", "INTEGER"),
+    ],
+}
+
 _db_path: Path | None = None
 
 
@@ -89,6 +103,12 @@ def init_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
         conn.execute("PRAGMA journal_mode=WAL")
+        for table, columns in ADDED_COLUMNS.items():
+            existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if existing:  # table exists from an older version
+                for name, sql_type in columns:
+                    if name not in existing:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
         conn.executescript(SCHEMA)
 
 

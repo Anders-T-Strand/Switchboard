@@ -1,11 +1,22 @@
-import { api } from "../api";
+import { api, type ModelStats } from "../api";
 import { PatchBay } from "../components/PatchBay";
 import { StackedColumns } from "../components/StackedColumns";
 import { ErrorNote, ModelTag, Panel, Readouts } from "../components/bits";
-import { compact, duration, int, pct, usd } from "../format";
+import { compact, duration, effortLabel, int, pct, usd } from "../format";
 import { useApi, useApp } from "../hooks";
 
 const FAMILY_LABEL: Record<string, string> = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable" };
+
+/** "Low 4, High 2" for Claude rows, "Thinking on 3 of 8" for local rows. */
+function effortMix(m: ModelStats, order: string[]): string {
+  if (m.provider === "ollama") {
+    return m.think_known ? `Thinking on ${int(m.thinking)} of ${int(m.think_known)}` : "–";
+  }
+  const parts = [...order, "default"]
+    .filter((e) => m.efforts?.[e])
+    .map((e) => `${e === "default" ? "Default" : effortLabel(e)} ${int(m.efforts[e])}`);
+  return parts.length ? parts.join(", ") : "–";
+}
 
 export function Overview({ days }: { days: number }) {
   const { colors, label, modelKeys, status, config } = useApp();
@@ -114,7 +125,6 @@ export function Overview({ days }: { days: number }) {
         </Panel>
       </div>
 
-      <div className="grid-2 wide-left">
         <Panel title="By model">
           {s.by_model.length === 0 ? (
             <p className="muted">Nothing yet in this period.</p>
@@ -125,7 +135,7 @@ export function Overview({ days }: { days: number }) {
                   <tr>
                     <th>Model</th>
                     <th className="num">Prompts</th>
-                    <th className="num">Failed</th>
+                    <th>Effort</th>
                     <th className="num">Tokens in</th>
                     <th className="num">Tokens out</th>
                     <th className="num">Median time</th>
@@ -136,8 +146,11 @@ export function Overview({ days }: { days: number }) {
                   {s.by_model.map((m) => (
                     <tr key={m.model_key}>
                       <td>{m.model_key === "(failed)" ? <span className="muted">No model answered</span> : <ModelTag modelKey={m.model_key} />}</td>
-                      <td className="num">{int(m.requests)}</td>
-                      <td className="num">{m.errors ? int(m.errors) : "–"}</td>
+                      <td className="num">
+                        {int(m.requests)}
+                        {m.errors > 0 && <span className="muted block small">{int(m.errors)} failed</span>}
+                      </td>
+                      <td className="effort-mix">{effortMix(m, config?.efforts ?? [])}</td>
                       <td className="num">{compact(m.input_tokens)}</td>
                       <td className="num">{compact(m.output_tokens)}</td>
                       <td className="num">{duration(m.median_latency_ms)}</td>
@@ -150,7 +163,8 @@ export function Overview({ days }: { days: number }) {
           )}
         </Panel>
 
-        <Panel title="Complexity mix" sub="As rated by the classifier, 1 trivial to 5 expert">
+      <div className="grid-2">
+        <Panel title="Complexity mix" sub="How capable a model each prompt needed, 1 trivial to 5 expert. Picks the model.">
           <StackedColumns
             rows={s.complexity.map((n, i) => ({ date: String(i + 1), count: n }))}
             keys={["count"]}
@@ -159,6 +173,19 @@ export function Overview({ days }: { days: number }) {
             format={(v) => int(v)}
             xLabel={(r) => String(r.date)}
             emptyText="No auto-routed prompts yet."
+            height={180}
+          />
+        </Panel>
+
+        <Panel title="Reasoning mix" sub="How much thinking each prompt needed, 1 none to 5 extensive. Picks the effort.">
+          <StackedColumns
+            rows={(s.reasoning ?? []).map((n, i) => ({ date: String(i + 1), count: n }))}
+            keys={["count"]}
+            colorFor={() => "var(--ink-2)"}
+            labelFor={() => "Prompts"}
+            format={(v) => int(v)}
+            xLabel={(r) => String(r.date)}
+            emptyText="No rated prompts yet."
             height={180}
           />
         </Panel>

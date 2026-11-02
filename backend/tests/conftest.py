@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import sys
 import textwrap
@@ -34,7 +35,7 @@ FAKE_CLAUDE = textwrap.dedent(
         sys.exit(1)
     print(json.dumps({
         "type": "result", "subtype": "success", "is_error": False,
-        "result": f"claude[{model}] answer. key_present={'ANTHROPIC_API_KEY' in os.environ} system_prompt={bool(sp)} prompt={prompt!r}",
+        "result": f"claude[{model}] answer. key_present={'ANTHROPIC_API_KEY' in os.environ} system_prompt={bool(sp)} effort={os.environ.get('CLAUDE_CODE_EFFORT_LEVEL')} prompt={prompt!r}",
         "session_id": "s1", "num_turns": 1, "total_cost_usd": 0.0123,
         "usage": {"input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 50},
         "modelUsage": {
@@ -47,7 +48,8 @@ FAKE_CLAUDE = textwrap.dedent(
 
 
 class FakeOllama:
-    """Classifier calls get complexity 4/code when the prompt contains HARD, 5 when EXPERT, else 1/chat."""
+    """Classifier labels: "C<n> R<n>" in the prompt sets complexity and reasoning directly.
+    Otherwise HARD -> code 4/4, EXPERT -> analysis 5/5, anything else -> chat 1/1."""
 
     def __init__(self):
         self.loaded = ["qwen3.6:35b-a3b"]
@@ -70,12 +72,15 @@ class FakeOllama:
             self.chat_calls.append(body)
             user = body["messages"][-1]["content"]
             if "format" in body:
-                if "EXPERT" in user:
-                    label = {"task_type": "analysis", "complexity": 5, "reason": "expert"}
+                m = re.search(r"C(\d) R(\d)", user)
+                if m:
+                    label = {"task_type": "code", "complexity": int(m[1]), "reasoning": int(m[2]), "reason": "set"}
+                elif "EXPERT" in user:
+                    label = {"task_type": "analysis", "complexity": 5, "reasoning": 5, "reason": "expert"}
                 elif "HARD" in user:
-                    label = {"task_type": "code", "complexity": 4, "reason": "hard code"}
+                    label = {"task_type": "code", "complexity": 4, "reasoning": 4, "reason": "hard code"}
                 else:
-                    label = {"task_type": "chat", "complexity": 1, "reason": "trivial"}
+                    label = {"task_type": "chat", "complexity": 1, "reasoning": 1, "reason": "trivial"}
                 content = json.dumps(label)
             else:
                 content = f"<think>hmm</think>local answer from {body['model']}"
@@ -134,6 +139,7 @@ def cfg(tmp_path, fake_claude, monkeypatch) -> Config:
             "rules": [
                 {"name": "expert", "min_complexity": 5, "model": "claude-opus"},
                 {"name": "hard", "min_complexity": 4, "model": "claude-sonnet"},
+                {"name": "deep-reasoning", "min_complexity": 3, "min_reasoning": 5, "model": "claude-sonnet"},
                 {"name": "default", "model": "qwen-moe"},
             ],
         },

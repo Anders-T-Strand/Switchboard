@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import { ErrorNote, Light, ModelTag, Panel } from "../components/bits";
-import { capitalize, int, price, when } from "../format";
+import { capitalize, effortLabel, int, price, when } from "../format";
 import { useApp } from "../hooks";
 
 export function Models({ onSynced }: { onSynced: () => void }) {
@@ -12,14 +12,44 @@ export function Models({ onSynced }: { onSynced: () => void }) {
   if (!config || !status) return <p className="muted">Loading…</p>;
   const r = config.routing;
 
+  function range(name: string, min: number | null, max: number | null): string | null {
+    if (min && max) return `${name} ${min} to ${max}`;
+    if (min) return `${name} ${min} or more`;
+    if (max) return `${name} ${max} or less`;
+    return null;
+  }
+
   function ruleText(rule: (typeof r.rules)[number]): string {
     const parts: string[] = [];
     if (rule.task_types?.length) parts.push(rule.task_types.map(capitalize).join(" or "));
-    if (rule.min_complexity && rule.max_complexity) parts.push(`complexity ${rule.min_complexity} to ${rule.max_complexity}`);
-    else if (rule.min_complexity) parts.push(`complexity ${rule.min_complexity} or more`);
-    else if (rule.max_complexity) parts.push(`complexity ${rule.max_complexity} or less`);
+    const cx = range("complexity", rule.min_complexity, rule.max_complexity);
+    const rs = range("reasoning", rule.min_reasoning, rule.max_reasoning);
+    if (cx) parts.push(cx);
+    if (rs) parts.push(rs);
     return parts.length ? parts.join(", ") : "Anything else";
   }
+
+  function ruleEffort(rule: (typeof r.rules)[number]): string | null {
+    if (rule.effort) return `Effort pinned at ${effortLabel(rule.effort).toLowerCase()}`;
+    if (rule.min_effort && rule.max_effort) {
+      return `Effort kept between ${effortLabel(rule.min_effort).toLowerCase()} and ${effortLabel(rule.max_effort).toLowerCase()}`;
+    }
+    if (rule.max_effort) return `Effort capped at ${effortLabel(rule.max_effort).toLowerCase()}`;
+    if (rule.min_effort) return `Effort at least ${effortLabel(rule.min_effort).toLowerCase()}`;
+    return null;
+  }
+
+  function modelEffort(key: string): string {
+    const m = config!.models[key];
+    if (m.provider === "ollama") {
+      if (m.think === true) return "Thinking always on";
+      if (m.think === false) return "Thinking always off";
+      return "Thinking off at low effort, on above";
+    }
+    return m.max_effort ? `Up to ${effortLabel(m.max_effort).toLowerCase()}` : "Any level";
+  }
+
+  const byReasoning = [1, 2, 3, 4, 5].map((n) => ({ n, effort: r.effort.by_reasoning[String(n)] ?? null }));
 
   return (
     <div className="stack">
@@ -31,6 +61,7 @@ export function Models({ onSynced }: { onSynced: () => void }) {
                 <th>Model</th>
                 <th>Runs on</th>
                 <th>Model id</th>
+                <th>Effort</th>
                 <th>State</th>
               </tr>
             </thead>
@@ -40,6 +71,7 @@ export function Models({ onSynced }: { onSynced: () => void }) {
                   <td><ModelTag modelKey={m.key} /> <span className="muted key">{m.key}</span></td>
                   <td>{m.provider === "ollama" ? "Ollama (local)" : "Claude Code (your plan)"}</td>
                   <td><code>{m.model}</code></td>
+                  <td className="muted">{modelEffort(m.key)}</td>
                   <td>
                     {m.provider === "ollama" ? (
                       m.loaded ? (
@@ -63,12 +95,16 @@ export function Models({ onSynced }: { onSynced: () => void }) {
       </Panel>
 
       <div className="grid-2">
+        <div className="stack">
         <Panel title="Routing rules" sub="Checked top to bottom. The first rule that matches picks the model.">
           <ol className="rules">
             {r.rules.map((rule) => (
               <li key={rule.name}>
                 <code>{rule.name}</code>
-                <span>{ruleText(rule)}</span>
+                <span>
+                  {ruleText(rule)}
+                  {ruleEffort(rule) && <span className="muted block small">{ruleEffort(rule)}</span>}
+                </span>
                 <ModelTag modelKey={rule.model} />
               </li>
             ))}
@@ -79,7 +115,7 @@ export function Models({ onSynced }: { onSynced: () => void }) {
               <dd>
                 {label(r.classifier.model)}
                 {r.classifier.use_loaded_model ? ", or whichever local model is already loaded" : ""}
-                {r.classifier.think === false ? ", reasoning off" : ""}
+                {r.classifier.think === false ? ", thinking off" : ""}
               </dd>
             </div>
             <div>
@@ -92,6 +128,29 @@ export function Models({ onSynced }: { onSynced: () => void }) {
             </div>
           </dl>
         </Panel>
+
+        <Panel
+          title="Effort by reasoning"
+          sub="The classifier rates reasoning separately from complexity. Complexity picks the model, reasoning picks how hard it thinks."
+        >
+          <ol className="effort-ladder">
+            {byReasoning.map(({ n, effort }) => (
+              <li key={n}>
+                <span className="ladder-n">{n}</span>
+                <span className="ladder-bar" aria-hidden>
+                  <span style={{ width: `${effort ? ((config.efforts.indexOf(effort) + 1) / config.efforts.length) * 100 : 0}%` }} />
+                </span>
+                <span>{effort ? effortLabel(effort) : <span className="muted">Your /effort setting</span>}</span>
+                <span className="muted small">{effort === "low" ? "local: thinking off" : effort ? "local: thinking on" : ""}</span>
+              </li>
+            ))}
+          </ol>
+          <p className="footnote">
+            Rules can pin or cap the effort, and a model can have its own cap, all in config.yaml. Picking an effort in the
+            Console overrides all of it for that prompt.
+          </p>
+        </Panel>
+        </div>
 
         <div className="stack">
           <Panel title="Connections">
@@ -173,6 +232,7 @@ export function Models({ onSynced }: { onSynced: () => void }) {
           </Panel>
 
           <Panel title="Prices used for estimates" sub="USD per million tokens, Claude API list prices">
+            <div className="table-scroll">
             <table className="data compact">
               <thead>
                 <tr>
@@ -198,6 +258,7 @@ export function Models({ onSynced }: { onSynced: () => void }) {
                 ))}
               </tbody>
             </table>
+            </div>
           </Panel>
         </div>
       </div>

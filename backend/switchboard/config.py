@@ -12,6 +12,19 @@ from pydantic import BaseModel, Field, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Claude Code effort levels, lowest to highest.
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+EffortLevel = Literal["low", "medium", "high", "xhigh", "max"]
+
+
+def clamp_effort(level: str, floor: str | None = None, ceiling: str | None = None) -> str:
+    i = EFFORTS.index(level)
+    if floor is not None:
+        i = max(i, EFFORTS.index(floor))
+    if ceiling is not None:
+        i = min(i, EFFORTS.index(ceiling))
+    return EFFORTS[i]
+
 
 class ServerCfg(BaseModel):
     host: str = "127.0.0.1"
@@ -42,8 +55,12 @@ class ModelCfg(BaseModel):
     provider: Literal["ollama", "claude_cli"]
     model: str
     label: str | None = None
-    think: bool | None = None  # Ollama only. None leaves Ollama's default alone.
+    # Ollama only. None turns thinking on or off from the effort level (off at low).
+    # true or false pins it.
+    think: bool | None = None
     options: dict = Field(default_factory=dict)  # Ollama only, e.g. {num_ctx: 16384}
+    # Claude only. Highest effort this model is ever run at, unless picked by hand.
+    max_effort: EffortLevel | None = None
 
 
 class RuleCfg(BaseModel):
@@ -52,15 +69,34 @@ class RuleCfg(BaseModel):
     task_types: list[str] | None = None
     min_complexity: int | None = None
     max_complexity: int | None = None
+    min_reasoning: int | None = None
+    max_reasoning: int | None = None
+    effort: EffortLevel | None = None  # pin the effort instead of deriving it from reasoning
+    min_effort: EffortLevel | None = None
+    max_effort: EffortLevel | None = None
 
-    def matches(self, task_type: str, complexity: int) -> bool:
+    def matches(self, task_type: str, complexity: int, reasoning: int) -> bool:
         if self.task_types and task_type not in self.task_types:
             return False
         if self.min_complexity is not None and complexity < self.min_complexity:
             return False
         if self.max_complexity is not None and complexity > self.max_complexity:
             return False
+        if self.min_reasoning is not None and reasoning < self.min_reasoning:
+            return False
+        if self.max_reasoning is not None and reasoning > self.max_reasoning:
+            return False
         return True
+
+
+def _default_effort_map() -> dict[int, str]:
+    return {1: "low", 2: "low", 3: "medium", 4: "high", 5: "xhigh"}
+
+
+class EffortCfg(BaseModel):
+    # Reasoning depth (1-5, rated by the classifier) -> effort level.
+    # A missing level means "don't set one", so Claude Code uses your own /effort setting.
+    by_reasoning: dict[int, EffortLevel] = Field(default_factory=_default_effort_map)
 
 
 class ClassifierCfg(BaseModel):
@@ -75,6 +111,7 @@ class RoutingCfg(BaseModel):
     classifier: ClassifierCfg
     prefer_loaded_local: bool = True
     fallback_order: list[str] = Field(default_factory=list)
+    effort: EffortCfg = Field(default_factory=EffortCfg)
     rules: list[RuleCfg]
 
 
@@ -116,6 +153,12 @@ class Config(BaseModel):
             problems.append("classifier model must be a local (ollama) model")
         if not self.routing.rules:
             problems.append("routing.rules is empty")
+        bad_levels = [k for k in self.routing.effort.by_reasoning if not 1 <= k <= 5]
+        if bad_levels:
+            problems.append(f"routing.effort.by_reasoning keys must be 1-5, got {bad_levels}")
+        for rule in self.routing.rules:
+            if rule.min_effort and rule.max_effort and EFFORTS.index(rule.min_effort) > EFFORTS.index(rule.max_effort):
+                problems.append(f"rule '{rule.name}' has min_effort above max_effort")
         if self.pricing.reference_model and self.pricing.reference_model not in self.pricing.models:
             problems.append(f"pricing.reference_model '{self.pricing.reference_model}' is not in pricing.models")
         if problems:

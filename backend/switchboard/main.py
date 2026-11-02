@@ -21,6 +21,7 @@ log = logging.getLogger("switchboard")
 class PromptIn(BaseModel):
     prompt: str = Field(min_length=1, max_length=500_000)
     model: str = "auto"
+    effort: str = "auto"
     task_id: int | None = None
     system_prompt: str | None = None
 
@@ -28,6 +29,7 @@ class PromptIn(BaseModel):
 class PreviewIn(BaseModel):
     prompt: str = Field(min_length=1, max_length=500_000)
     model: str = "auto"
+    effort: str = "auto"
 
 
 class TaskIn(BaseModel):
@@ -79,14 +81,14 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
     @app.post("/api/prompt")
     def run_prompt(body: PromptIn):
         try:
-            return svc.run_prompt(body.prompt, body.model, body.task_id, body.system_prompt)
+            return svc.run_prompt(body.prompt, body.model, body.task_id, body.system_prompt, body.effort)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
     @app.post("/api/route/preview")
     def preview(body: PreviewIn):
         try:
-            return svc.preview(body.prompt, body.model)
+            return svc.preview(body.prompt, body.model, body.effort)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 

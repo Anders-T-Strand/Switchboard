@@ -160,7 +160,10 @@ class ClaudeCLI:
         self._version = (time.monotonic(), ver)
         return ver
 
-    def complete(self, model_alias: str, prompt: str, system_prompt: str | None = None) -> Completion:
+    def complete(self, model_alias: str, prompt: str, system_prompt: str | None = None,
+                 effort: str | None = None) -> Completion:
+        """Run one prompt. `effort` sets CLAUDE_CODE_EFFORT_LEVEL, which overrides your saved
+        /effort setting for this call only. None leaves your setting alone."""
         exe = self.resolve()
         if not exe:
             raise ProviderError(
@@ -184,6 +187,10 @@ class ClaudeCLI:
             args += ["--disallowedTools", ",".join(self.cfg.disallowed_tools)]
         args += list(self.cfg.extra_args)
 
+        env = self._env()
+        if effort:
+            env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
+
         stdin_text = prompt
         if self.cfg.prompt_via == "arg":
             args.append(prompt)
@@ -199,7 +206,7 @@ class ClaudeCLI:
                 encoding="utf-8",
                 errors="replace",
                 cwd=self.workdir,
-                env=self._env(),
+                env=env,
                 timeout=self.cfg.timeout_s,
                 creationflags=_CREATE_NO_WINDOW,
             )

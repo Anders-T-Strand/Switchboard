@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type RequestDetail } from "../api";
-import { fromDetail, RouteSteps, UsageLine } from "../components/RouteSteps";
+import { effortText, fromDetail, RouteSteps, UsageLine } from "../components/RouteSteps";
 import { ErrorNote, Md, ModelTag } from "../components/bits";
 import { capitalize, compact, duration, usd, when } from "../format";
 import { hashParam, useApi, useApp } from "../hooks";
@@ -69,8 +69,10 @@ export function Requests() {
                 <th>When</th>
                 <th>Prompt</th>
                 <th>Task type</th>
-                <th className="num">Cx</th>
+                <th className="num" title="Complexity, picks the model">Cx</th>
+                <th className="num" title="Reasoning, picks the effort">Rs</th>
                 <th>Answered by</th>
+                <th>Effort</th>
                 <th className="num">Tokens</th>
                 <th className="num">Time</th>
                 <th className="num">API rates</th>
@@ -81,11 +83,18 @@ export function Requests() {
                 <tr key={r.id} onClick={() => setOpenId(r.id)} tabIndex={0} onKeyDown={(e) => e.key === "Enter" && setOpenId(r.id)}>
                   <td className="nowrap">{when(r.created_at)}</td>
                   <td className="prompt-cell">{r.prompt_preview}</td>
-                  <td>{r.task_type ? capitalize(r.task_type) : <span className="muted">forced</span>}</td>
+                  <td>{r.task_type ? capitalize(r.task_type) : <span className="muted">–</span>}</td>
                   <td className="num">{r.complexity ?? "–"}</td>
+                  <td className="num">{r.reasoning ?? "–"}</td>
                   <td className="nowrap">
                     {r.status === "ok" ? <ModelTag modelKey={r.model_key} /> : <span className="error-text">Failed</span>}
                     {r.fell_back ? <span className="flag">fallback</span> : null}
+                  </td>
+                  <td className="nowrap">
+                    {r.status === "ok"
+                      ? effortText(r.provider, r.effort, r.think === null ? null : Boolean(r.think))
+                      : <span className="muted">–</span>}
+                    {r.effort_source === "forced" && <span className="flag">by hand</span>}
                   </td>
                   <td className="num">{compact(r.input_tokens + r.cache_read_tokens + r.cache_write_tokens + r.output_tokens)}</td>
                   <td className="num">{duration(r.latency_ms)}</td>

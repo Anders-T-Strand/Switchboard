@@ -55,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     ask = sub.add_parser("ask", help="send a prompt to the running server")
     ask.add_argument("prompt", nargs="+", help='prompt text, or "-" to read it from stdin')
     ask.add_argument("--model", default="auto", help="model key from config.yaml, or auto")
+    ask.add_argument("--effort", default="auto", help="low, medium, high, xhigh, max, or auto")
     ask.add_argument("--task", type=int, help="attach the request to a task id")
     ask.add_argument("--json", action="store_true", help="print the full JSON response")
 
@@ -87,7 +88,11 @@ def main(argv: list[str] | None = None) -> int:
         host = "127.0.0.1" if cfg.server.host in ("0.0.0.0", "::") else cfg.server.host
         url = f"http://{host}:{cfg.server.port}/api/prompt"
         try:
-            r = httpx.post(url, json={"prompt": prompt, "model": args.model, "task_id": args.task}, timeout=None)
+            r = httpx.post(
+                url,
+                json={"prompt": prompt, "model": args.model, "effort": args.effort, "task_id": args.task},
+                timeout=None,
+            )
         except httpx.HTTPError as e:
             print(f"Could not reach the server at {url}. Is it running? ({e})", file=sys.stderr)
             return 1
@@ -100,9 +105,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         routing = data.get("routing") or {}
         c = routing.get("classification") or {}
-        bits = [f"-> {data.get('model_label') or 'none'}"]
+        answered = data.get("model_label") or "none"
+        if data.get("provider") == "ollama" and data.get("think") is not None:
+            answered += f", thinking {'on' if data['think'] else 'off'}"
+        elif data.get("effort"):
+            answered += f" at {data['effort']} effort"
+        bits = [f"-> {answered}"]
         if c:
-            bits.append(f"{c.get('task_type')} / complexity {c.get('complexity')}")
+            bits.append(f"{c.get('task_type')} / complexity {c.get('complexity')} / reasoning {c.get('reasoning')}")
         bits.append(f"{data.get('input_tokens', 0)} in / {data.get('output_tokens', 0)} out")
         if data.get("latency_ms") is not None:
             bits.append(f"{data['latency_ms'] / 1000:.1f}s")

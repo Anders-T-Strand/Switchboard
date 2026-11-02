@@ -49,10 +49,11 @@ models:
     provider: claude_cli
     model: opus
     label: Claude Opus
+    # max_effort: high     # uncomment to never run Opus above high (saves Pro usage)
 
 routing:
   classifier:
-    model: qwen-moe          # local model that labels each prompt (task type + complexity 1-5)
+    model: qwen-moe          # local model that rates each prompt: task type, complexity 1-5, reasoning 1-5
     use_loaded_model: true   # classify with whichever configured local model is already in VRAM
     think: false             # skip reasoning traces so classification stays fast
     timeout_s: 60
@@ -62,19 +63,42 @@ routing:
   prefer_loaded_local: true
   # Tried in order when the routed model fails (Ollama down, claude not logged in, usage limit hit...).
   fallback_order: [claude-sonnet, qwen-moe]
+
+  # Complexity picks the model. Reasoning picks how hard it thinks.
+  # Claude gets the effort level (overrides your own /effort setting, for that call only).
+  # Local models get thinking off at low and on at anything higher.
+  # So a prompt can need Opus but barely any thinking (Opus at low),
+  # or need Sonnet thinking through many steps (Sonnet at xhigh).
+  effort:
+    by_reasoning:
+      1: low
+      2: low
+      3: medium
+      4: high
+      5: xhigh
+      # Leave a level out to use your own Claude Code /effort setting for it.
+
   # First matching rule wins. A rule matches when every condition it sets holds.
+  # Conditions: task_types, min_complexity, max_complexity, min_reasoning, max_reasoning
+  # Effort: effort (pin a level), min_effort, max_effort (clamp the level from by_reasoning)
   rules:
-    - name: expert
+    - name: expert              # needs the strongest model
       min_complexity: 5
       model: claude-opus
+      # max_effort: high
     - name: hard
       min_complexity: 4
+      model: claude-sonnet
+    - name: deep-reasoning      # a moderate prompt that needs a long, careful work-through
+      min_complexity: 3
+      min_reasoning: 5
       model: claude-sonnet
     # Uncomment to send moderate coding work to Claude as well:
     # - name: code
     #   task_types: [code]
     #   min_complexity: 3
     #   model: claude-sonnet
+    #   max_effort: medium
     - name: default
       model: qwen-moe
 

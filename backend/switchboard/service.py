@@ -24,23 +24,22 @@ class Service:
 
     # Prompts -------------------------------------------------------------------
 
-    def preview(self, prompt: str, model: str = "auto") -> dict:
+    def _plan(self, prompt: str, model: str, effort: str):
         try:
-            plan = self.router.plan(prompt, model)
+            return self.router.plan(prompt, model, effort)
         except KeyError as e:
             raise ValueError(str(e).strip("'\"")) from None
-        return plan.to_dict(self.cfg)
+
+    def preview(self, prompt: str, model: str = "auto", effort: str = "auto") -> dict:
+        return self._plan(prompt, model, effort).to_dict(self.cfg)
 
     def run_prompt(self, prompt: str, model: str = "auto", task_id: int | None = None,
-                   system_prompt: str | None = None) -> dict:
+                   system_prompt: str | None = None, effort: str = "auto") -> dict:
         if task_id is not None:
             with connect() as conn:
                 if not conn.execute("SELECT 1 FROM tasks WHERE id = ?", (task_id,)).fetchone():
                     raise ValueError(f"task {task_id} does not exist")
-        try:
-            plan = self.router.plan(prompt, model)
-        except KeyError as e:
-            raise ValueError(str(e).strip("'\"")) from None
+        plan = self._plan(prompt, model, effort)
 
         c = plan.classification
         rec: dict = {
@@ -51,6 +50,10 @@ class Service:
             "route_mode": plan.mode,
             "task_type": c.task_type if c else None,
             "complexity": c.complexity if c else None,
+            "reasoning": c.reasoning if c else None,
+            "effort": plan.effort,
+            "effort_source": plan.effort_source,
+            "think": None if plan.think is None else int(plan.think),
             "classifier_source": c.source if c else None,
             "classifier_model": c.model if c else None,
             "classifier_reason": c.reason if c else None,
@@ -96,6 +99,8 @@ class Service:
                 cache_write_tokens=comp.cache_write_tokens,
                 latency_ms=comp.latency_ms,
                 load_ms=comp.load_ms,
+                effort=comp.extra.get("effort"),
+                think=None if comp.extra.get("think") is None else int(comp.extra["think"]),
             )
             if m.provider == "claude_cli":
                 if comp.cost_usd is not None:
@@ -140,7 +145,8 @@ class Service:
             items = rows(conn.execute(
                 f"""SELECT r.id, r.created_at, r.task_id, t.title AS task_title,
                            substr(r.prompt, 1, 200) AS prompt_preview, r.status, r.error, r.route_mode,
-                           r.task_type, r.complexity, r.classifier_source, r.rule, r.routed_model,
+                           r.task_type, r.complexity, r.reasoning, r.effort, r.effort_source, r.think,
+                           r.classifier_source, r.rule, r.routed_model,
                            r.model_key, r.provider, r.fell_back, r.route_note, r.input_tokens,
                            r.output_tokens, r.cache_read_tokens, r.cache_write_tokens,
                            r.latency_ms, r.cost_usd, r.avoided_usd
@@ -262,8 +268,11 @@ class Service:
         }
 
     def config_view(self) -> dict:
+        from .config import EFFORTS
+
         return {
             "models": {k: m.model_dump() for k, m in self.cfg.models.items()},
             "routing": self.cfg.routing.model_dump(),
             "pricing": self.cfg.pricing.model_dump(),
+            "efforts": list(EFFORTS),
         }

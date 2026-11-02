@@ -41,7 +41,7 @@ def summary(cfg: Config, days: int) -> dict:
     since = _since(days)
     with connect() as conn:
         reqs = rows(conn.execute(
-            """SELECT model_key, provider, status, fell_back, task_type, complexity, route_mode,
+            """SELECT model_key, provider, status, fell_back, task_type, complexity, reasoning, route_mode, effort, think,
                       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                       latency_ms, cost_usd, avoided_usd
                FROM requests WHERE created_at >= ?""",
@@ -68,11 +68,18 @@ def summary(cfg: Config, days: int) -> dict:
             "model_key": key, "label": cfg.label(r["model_key"]) or "Failed", "provider": r["provider"],
             "requests": 0, "errors": 0, "input_tokens": 0, "output_tokens": 0,
             "cost_usd": 0.0, "avoided_usd": 0.0, "_lat": [],
+            "efforts": defaultdict(int), "thinking": 0, "think_known": 0,
         })
         b["requests"] += 1
         if r["status"] != "ok":
             b["errors"] += 1
             continue
+        if r["provider"] == "ollama":
+            if r["think"] is not None:
+                b["think_known"] += 1
+                b["thinking"] += r["think"]
+        else:
+            b["efforts"][r["effort"] or "default"] += 1
         b["input_tokens"] += tok_in(r)
         b["output_tokens"] += r["output_tokens"]
         b["cost_usd"] += r["cost_usd"]
@@ -82,10 +89,14 @@ def summary(cfg: Config, days: int) -> dict:
     for b in by_model.values():
         lat = sorted(b.pop("_lat"))
         b["median_latency_ms"] = lat[len(lat) // 2] if lat else None
+        b["efforts"] = dict(b["efforts"])
 
     task_types: dict[str, dict] = {}
     complexity = [0, 0, 0, 0, 0]
+    reasoning = [0, 0, 0, 0, 0]
     for r in ok:
+        if r["reasoning"]:
+            reasoning[r["reasoning"] - 1] += 1
         if r["route_mode"] != "auto":
             continue
         t = task_types.setdefault(r["task_type"] or "other", {"task_type": r["task_type"] or "other", "total": 0, "models": defaultdict(int)})
@@ -144,6 +155,7 @@ def summary(cfg: Config, days: int) -> dict:
             ({**t, "models": dict(t["models"])} for t in task_types.values()), key=lambda t: -t["total"]
         ),
         "complexity": complexity,
+        "reasoning": reasoning,
         "claude_code": {
             "interactive": cc_sources.get("interactive", empty_cc),
             "router": cc_sources.get("router", empty_cc),

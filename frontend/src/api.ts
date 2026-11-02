@@ -1,8 +1,11 @@
 // Typed wrappers around the Switchboard API.
 
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
 export type Classification = {
   task_type: string;
   complexity: number;
+  reasoning: number;
   reason: string;
   source: "model" | "heuristic";
   model: string | null;
@@ -17,6 +20,10 @@ export type RoutePlan = {
   classification: Classification | null;
   notes: string[];
   loaded: string[];
+  route_effort: Effort | null;
+  effort_source: "forced" | "rule" | "reasoning" | null;
+  effort: Effort | null;
+  think: boolean | null;
   chosen_label: string;
   routed_label: string;
 };
@@ -32,6 +39,10 @@ export type RequestRow = {
   route_mode: "auto" | "forced";
   task_type: string | null;
   complexity: number | null;
+  reasoning: number | null;
+  effort: Effort | null;
+  effort_source: "forced" | "rule" | "reasoning" | null;
+  think: number | null;
   classifier_source: string | null;
   rule: string | null;
   routed_model: string | null;
@@ -87,6 +98,9 @@ export type ModelStats = {
   cost_usd: number;
   avoided_usd: number;
   median_latency_ms: number | null;
+  efforts: Record<string, number>;
+  thinking: number;
+  think_known: number;
 };
 
 export type CcBucket = {
@@ -116,6 +130,7 @@ export type Summary = {
   by_model: ModelStats[];
   by_task_type: { task_type: string; total: number; models: Record<string, number> }[];
   complexity: number[];
+  reasoning: number[];
   claude_code: {
     interactive: CcBucket;
     router: CcBucket;
@@ -166,20 +181,30 @@ export type Rule = {
   task_types: string[] | null;
   min_complexity: number | null;
   max_complexity: number | null;
+  min_reasoning: number | null;
+  max_reasoning: number | null;
+  effort: Effort | null;
+  min_effort: Effort | null;
+  max_effort: Effort | null;
 };
 
 export type ConfigView = {
-  models: Record<string, { provider: string; model: string; label: string | null; think: boolean | null }>;
+  models: Record<
+    string,
+    { provider: string; model: string; label: string | null; think: boolean | null; max_effort: Effort | null }
+  >;
   routing: {
     classifier: { model: string; use_loaded_model: boolean; think: boolean | null; timeout_s: number; max_prompt_chars: number };
     prefer_loaded_local: boolean;
     fallback_order: string[];
+    effort: { by_reasoning: Record<string, Effort> };
     rules: Rule[];
   };
   pricing: {
     reference_model: string | null;
     models: Record<string, { match: string; input: number; output: number; cache_read: number; cache_write: number }>;
   };
+  efforts: Effort[];
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -210,9 +235,9 @@ export const api = {
   config: () => request<ConfigView>("/api/config"),
   sync: () => request<SyncState>("/api/claude-code/sync", { method: "POST" }),
 
-  prompt: (body: { prompt: string; model: string; task_id: number | null; system_prompt?: string | null }) =>
+  prompt: (body: { prompt: string; model: string; effort: string; task_id: number | null; system_prompt?: string | null }) =>
     request<RequestDetail>("/api/prompt", { method: "POST", body: json(body) }),
-  preview: (body: { prompt: string; model: string }) =>
+  preview: (body: { prompt: string; model: string; effort: string }) =>
     request<RoutePlan>("/api/route/preview", { method: "POST", body: json(body) }),
 
   requests: (q: { limit?: number; offset?: number; task_id?: number | null; model?: string; status?: string }) => {

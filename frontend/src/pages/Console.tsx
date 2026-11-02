@@ -2,13 +2,14 @@ import { useState } from "react";
 import { api, type RequestDetail, type RoutePlan } from "../api";
 import { fromDetail, fromPlan, RouteSteps, UsageLine } from "../components/RouteSteps";
 import { ErrorNote, Md, ModelTag, Panel } from "../components/bits";
-import { when } from "../format";
+import { effortLabel, when } from "../format";
 import { useApi, useApp } from "../hooks";
 
 export function Console() {
-  const { modelKeys, label } = useApp();
+  const { modelKeys, label, config } = useApp();
   const [prompt, setPrompt] = useState("");
   const [model, setModel] = useState("auto");
+  const [effort, setEffort] = useState("auto");
   const [taskId, setTaskId] = useState<string>("");
   const [preview, setPreview] = useState<RoutePlan | null>(null);
   const [result, setResult] = useState<RequestDetail | null>(null);
@@ -25,7 +26,7 @@ export function Console() {
     setError(null);
     setResult(null);
     try {
-      const r = await api.prompt({ prompt, model, task_id: taskId ? Number(taskId) : null });
+      const r = await api.prompt({ prompt, model, effort, task_id: taskId ? Number(taskId) : null });
       setResult(r);
       setPreview(null);
       recent.reload();
@@ -42,7 +43,7 @@ export function Console() {
     setBusy("preview");
     setError(null);
     try {
-      setPreview(await api.preview({ prompt, model }));
+      setPreview(await api.preview({ prompt, model, effort }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -100,6 +101,15 @@ export function Console() {
               </select>
             </label>
             <label>
+              <span>Effort</span>
+              <select value={effort} onChange={(e) => { setEffort(e.target.value); setPreview(null); }}>
+                <option value="auto">Auto (from reasoning)</option>
+                {(config?.efforts ?? []).map((e) => (
+                  <option key={e} value={e}>{effortLabel(e)}</option>
+                ))}
+              </select>
+            </label>
+            <label>
               <span>Task</span>
               <select value={taskId} onChange={(e) => setTaskId(e.target.value)}>
                 <option value="">None</option>
@@ -109,7 +119,12 @@ export function Console() {
               </select>
             </label>
             <div className="composer-actions">
-              <button type="button" className="ghost" onClick={doPreview} disabled={!canSend || model !== "auto"}>
+              <button
+                type="button"
+                className="ghost"
+                onClick={doPreview}
+                disabled={!canSend || (model !== "auto" && effort !== "auto")}
+              >
                 {busy === "preview" ? "Checking…" : "Preview route"}
               </button>
               <button type="submit" className="primary" disabled={!canSend}>
@@ -117,7 +132,10 @@ export function Console() {
               </button>
             </div>
           </div>
-          <p className="hint">Ctrl+Enter sends. Preview runs only the classifier, so nothing is answered or logged.</p>
+          <p className="hint">
+            Ctrl+Enter sends. Auto effort follows how much reasoning the prompt needs, separately from which model answers.
+            Preview runs only the classifier, so nothing is answered or logged.
+          </p>
         </form>
 
         {error && <ErrorNote>{error}</ErrorNote>}

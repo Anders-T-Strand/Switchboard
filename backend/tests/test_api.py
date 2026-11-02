@@ -101,6 +101,7 @@ def test_stats(client, cfg):
     assert s["requests"]["local"] == 1 and s["requests"]["claude"] == 2
     assert s["requests"]["local_share"] == pytest.approx(1 / 3)
     assert s["complexity"] == [1, 0, 0, 1, 1]
+    assert s["reasoning"] == [1, 0, 0, 1, 1]
     assert {m["model_key"] for m in s["by_model"]} == {"qwen-moe", "claude-sonnet", "claude-opus"}
     cc = s["claude_code"]["interactive"]
     assert cc["sessions"] == 1 and cc["cost_usd"] == pytest.approx(0.024)
@@ -121,4 +122,57 @@ def test_status_and_config(client):
     assert models["qwen-moe"]["loaded"] is True and models["qwen-dense"]["loaded"] is False
     assert models["qwen-dense"]["available"] is True
     c = client.get("/api/config").json()
-    assert [r["name"] for r in c["routing"]["rules"]] == ["expert", "hard", "default"]
+    assert [r["name"] for r in c["routing"]["rules"]] == ["expert", "hard", "deep-reasoning", "default"]
+    assert c["efforts"] == ["low", "medium", "high", "xhigh", "max"]
+
+
+def test_effort_is_recorded(client):
+    data = client.post("/api/prompt", json={"prompt": "C5 R1 polish this toast"}).json()
+    assert data["model_key"] == "claude-opus"
+    assert (data["effort"], data["effort_source"], data["reasoning"]) == ("low", "reasoning", 1)
+    assert "effort=low" in data["response"]
+
+    data = client.post("/api/prompt", json={"prompt": "C2 R1 hi"}).json()
+    assert data["provider"] == "ollama" and data["think"] == 0
+
+    data = client.post("/api/prompt", json={"prompt": "anything", "model": "claude-sonnet", "effort": "max"}).json()
+    assert (data["effort"], data["effort_source"]) == ("max", "forced")
+
+    assert client.post("/api/prompt", json={"prompt": "x", "effort": "turbo"}).status_code == 400
+
+    row = client.get("/api/requests").json()["items"][0]
+    assert row["effort"] == "max" and row["reasoning"] is None  # both forced, classifier skipped
+
+    s = client.get("/api/stats/summary?days=7").json()
+    by = {m["model_key"]: m for m in s["by_model"]}
+    assert by["claude-opus"]["efforts"] == {"low": 1}
+    assert by["qwen-moe"]["think_known"] == 1 and by["qwen-moe"]["thinking"] == 0
+
+
+def test_preview_with_effort(client):
+    p = client.post("/api/route/preview", json={"prompt": "C4 R5"}).json()
+    assert p["chosen"] == "claude-sonnet" and p["effort"] == "xhigh"
+
+
+def test_old_database_is_migrated(tmp_path):
+    import sqlite3
+
+    from switchboard.db import connect, init_db
+
+    from switchboard.db import SCHEMA
+
+    # The first release's schema: today's minus the columns added since.
+    added = ("reasoning INTEGER", "effort TEXT", "effort_source TEXT", "think INTEGER")
+    v1 = "\n".join(line for line in SCHEMA.splitlines() if not line.strip().startswith(added))
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(v1)
+    assert "effort" not in {r[1] for r in old.execute("PRAGMA table_info(requests)")}
+    old.execute("INSERT INTO requests (created_at, prompt, status, route_mode) VALUES ('x', 'old', 'ok', 'auto')")
+    old.commit()
+    old.close()
+    init_db(path)
+    with connect() as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(requests)")}
+        assert {"reasoning", "effort", "effort_source", "think"} <= cols
+        assert conn.execute("SELECT prompt FROM requests").fetchone()[0] == "old"

@@ -61,3 +61,15 @@ const priceFmt = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maxi
 export function price(n: number): string {
   return `$${priceFmt.format(n)}`;
 }
+
+export const EFFORT_LABEL: Record<string, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+};
+
+export function effortLabel(e: string | null | undefined): string {
+  return e ? EFFORT_LABEL[e] ?? e : "Default";
+}
