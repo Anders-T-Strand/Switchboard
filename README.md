@@ -1,6 +1,6 @@
 # Switchboard
 
-[![CI](https://github.com/Anders-T-Strand/AI-Dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/Anders-T-Strand/AI-Dashboard/actions/workflows/ci.yml)
+[![CI](https://github.com/Anders-T-Strand/Switchboard/actions/workflows/ci.yml/badge.svg)](https://github.com/Anders-T-Strand/Switchboard/actions/workflows/ci.yml)
 
 A self-hosted AI console that decides, for every prompt, which model should answer it and how hard that model should think.
 
@@ -127,8 +127,8 @@ The embedding model is small (about 640 MB) and stays loaded next to your chat m
 ## Setup on Windows
 
 ```powershell
-git clone https://github.com/Anders-T-Strand/AI-Dashboard.git
-cd AI-Dashboard
+git clone https://github.com/Anders-T-Strand/Switchboard.git
+cd Switchboard
 
 # Pull the local models named in config.yaml (or edit config.yaml to match what you have)
 ollama pull qwen3.6:35b-a3b
@@ -147,7 +147,7 @@ After the first run it just starts the server. It rebuilds the dashboard on its 
 To start it from any folder, add this to your PowerShell profile (`notepad $PROFILE`) with your own path:
 
 ```powershell
-function switchboard { & "C:\path\to\AI-Dashboard\switchboard.cmd" @args }
+function switchboard { & "C:\path\to\Switchboard\switchboard.cmd" @args }
 ```
 
 If the sidebar says Claude Code wasn't found, run `where.exe claude` in PowerShell. The server also checks `%USERPROFILE%\.local\bin` and `%APPDATA%\npm`, so a fresh install is usually picked up after a restart. Otherwise set `claude.command` in `config.yaml` to the full path of `claude.exe`.
@@ -155,8 +155,8 @@ If the sidebar says Claude Code wasn't found, run `where.exe claude` in PowerShe
 ## Setup on macOS and Linux
 
 ```bash
-git clone https://github.com/Anders-T-Strand/AI-Dashboard.git
-cd AI-Dashboard
+git clone https://github.com/Anders-T-Strand/Switchboard.git
+cd Switchboard
 ollama pull qwen3.6:35b-a3b        # or edit config.yaml to match your models
 ollama pull qwen3-embedding:0.6b
 ./start.sh --open
