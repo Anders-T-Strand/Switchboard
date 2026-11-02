@@ -1229,7 +1229,6 @@ table.rows-clickable tbody tr:hover td {
   transform: rotate(180deg);
 }
 .msg-route {
-  scroll-margin-bottom: 290px; /* clear the sticky composer when scrolled into view */
   margin-top: 10px;
   padding: 14px 16px 4px;
   background: var(--panel);
@@ -1474,4 +1473,74 @@ table.rows-clickable tbody tr:hover td {
   font-size: 12.5px;
   color: var(--ink-3);
   margin-top: -4px;
+}
+
+/* Console layout. Wide screens: the page doesn't scroll, only the thread does, so the page title,
+   the chat's title bar and the composer stay put. Narrow screens: the page scrolls, the chat's title
+   bar sticks to the top and the composer to the bottom. */
+@media (min-width: 1101px) {
+  .main.main-fill {
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 14px;
+    overflow: hidden;
+  }
+  .main-fill .topbar {
+    flex: none;
+    margin-bottom: 14px;
+  }
+  .main-fill .chat {
+    flex: 1;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .main-fill .thread-col {
+    min-height: 0;
+    height: 100%;
+  }
+  .main-fill .thread-head {
+    flex: none;
+    margin-bottom: 0;
+  }
+  .main-fill .thread {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding: 20px 14px 24px 0;
+  }
+  .main-fill .chat .composer {
+    position: static;
+    flex: none;
+    background: none;
+    padding: 14px 0 0;
+    border-top: 1px solid var(--line);
+  }
+  .main-fill .chat-list {
+    position: static;
+    height: 100%;
+    max-height: none;
+  }
+  .main-fill .thread::-webkit-scrollbar {
+    width: 8px;
+  }
+  .main-fill .thread::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border-radius: 4px;
+  }
+}
+@media (max-width: 1100px) {
+  .thread-head {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--page);
+    padding-top: 10px;
+  }
+  .msg-route {
+    scroll-margin-top: 70px;      /* clear the sticky title bar */
+    scroll-margin-bottom: 200px;  /* and the sticky composer */
+  }
 }

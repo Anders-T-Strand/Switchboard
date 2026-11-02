@@ -32,6 +32,7 @@ export function Console() {
   const tasks = useApi(() => api.tasks(), []);
   const list = useApi(() => api.conversations(search), [search]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onHash = () => setChatId(chatIdFromHash());
@@ -71,10 +72,14 @@ export function Console() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
-  // Scroll the whole page to the bottom (not just the thread end) so the sticky composer
-  // sits below the newest message instead of covering it.
+  // Keep the newest message in view when a chat opens or a reply arrives.
   useEffect(() => {
-    if (conv || pending) window.scrollTo({ top: document.documentElement.scrollHeight });
+    if (!conv && !pending) return;
+    const el = threadRef.current;
+    // On wide screens the thread is its own scroll area between a fixed header and composer.
+    // On narrow screens the whole page scrolls instead.
+    if (el && getComputedStyle(el).overflowY === "auto") el.scrollTop = el.scrollHeight;
+    else window.scrollTo({ top: document.documentElement.scrollHeight });
   }, [conv?.id, conv?.messages.length, pending]);
 
   useLayoutEffect(() => {
@@ -190,7 +195,7 @@ export function Console() {
           />
         )}
 
-        <div className="thread">
+        <div className="thread" ref={threadRef}>
           {showEmpty && (
             <div className="chat-empty">
               <p>Ask anything. Each message is routed on its own, and the chat is saved so you can pick it up later.</p>

@@ -99,7 +99,7 @@ export default function App() {
           </div>
         </nav>
 
-        <main className="main">
+        <main className={page.id === "console" ? "main main-fill" : "main"}>
           <header className="topbar">
             <h1>{page.title}</h1>
             {page.id === "overview" && (
