@@ -53,6 +53,15 @@ class Service:
             ).fetchall()
         return [(r["prompt"], r["response"]) for r in found]
 
+    @staticmethod
+    def _last_turn(conversation_id: int) -> dict | None:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT id, status FROM requests WHERE conversation_id = ? ORDER BY turn DESC, id DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def preview(self, prompt: str, model: str = "auto", effort: str = "auto",
                 conversation_id: int | None = None) -> dict:
         history = self._history(conversation_id) if conversation_id is not None else []
@@ -68,6 +77,7 @@ class Service:
                 if not conn.execute("SELECT 1 FROM tasks WHERE id = ?", (task_id,)).fetchone():
                     raise ValueError(f"task {task_id} does not exist")
         history = self._history(conversation_id) if conversation_id is not None else []
+        previous = self._last_turn(conversation_id) if history else None
         plan = self._plan(prompt, model, effort, history[-1] if history else None)
         if conversation_id is None:
             conversation_id = self._create_conversation(prompt, bool(memory))
@@ -83,10 +93,15 @@ class Service:
         extra_context = build_memory_block(memory_items, self.cfg.chat.memory.max_chars)
 
         c = plan.classification
+        # What this message says about the previous answer. Only read when that answer is the
+        # latest turn, so a reply to a failed turn isn't pinned on an older answer.
+        follow_up = c.follow_up if c and previous and previous["status"] == "ok" else None
         rec: dict = {
             "created_at": now_iso(),
             "task_id": task_id,
             "conversation_id": conversation_id,
+            "follow_up": follow_up,
+            "follow_up_of": previous["id"] if follow_up else None,
             "context_turns": None,
             "neighbors": json.dumps(plan.neighbors) if plan.neighbors else None,
             "memory_ids": json.dumps([
@@ -174,6 +189,9 @@ class Service:
             marks = ", ".join(f":{k}" for k in rec)
             rec_id = conn.execute(f"INSERT INTO requests ({cols}) VALUES ({marks})", rec).lastrowid
             conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (rec["created_at"], conversation_id))
+            if follow_up in ("correction", "approval"):
+                conn.execute("UPDATE requests SET implicit_rating = ? WHERE id = ?",
+                             (-1 if follow_up == "correction" else 1, rec["follow_up_of"]))
         if self.index is not None and rec["status"] == "ok":
             self.index.wake.set()  # index the new turn now instead of on the next timer
         return self.get_request(rec_id) | {"routing": plan.to_dict(self.cfg)}
@@ -312,7 +330,7 @@ class Service:
         "reasoning", "classifier_source", "rule", "routed_model", "model_key", "provider",
         "provider_model", "effort", "effort_source", "think", "fell_back", "context_turns",
         "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "latency_ms",
-        "cost_usd", "rating",
+        "cost_usd", "rating", "implicit_rating", "follow_up",
     )
 
     def export(self, fmt: str = "conversations") -> Iterator[str]:

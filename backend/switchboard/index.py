@@ -257,10 +257,12 @@ class TurnIndex:
         return {r["id"]: r for r in found}
 
     def neighbors(self, prompt: str, limit: int) -> list[dict]:
-        """Most similar past prompts, with the model that answered and the current rating."""
+        """Most similar past prompts, with the model that answered, your rating and what your next
+        message said about the answer."""
         hits = self._query(prompt, PROMPT_INSTRUCTION, "prompt", limit)
         found = self._rows_by_id([i for i, _ in hits],
-                                 "r.conversation_id, r.turn, r.prompt, r.model_key, r.effort, r.rating, r.created_at")
+                                 "r.conversation_id, r.turn, r.prompt, r.model_key, r.effort, r.rating, "
+                                 "r.implicit_rating, r.created_at")
         out = []
         for rid, score in hits:
             r = found.get(rid)
@@ -269,7 +271,7 @@ class TurnIndex:
                     "request_id": rid, "score": round(score, 4), "conversation_id": r["conversation_id"],
                     "turn": r["turn"], "title": r["title"], "prompt": _clip(r["prompt"], 160),
                     "model_key": r["model_key"], "effort": r["effort"], "rating": r["rating"],
-                    "created_at": r["created_at"],
+                    "implicit_rating": r["implicit_rating"], "created_at": r["created_at"],
                 })
         return out
 

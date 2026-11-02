@@ -108,7 +108,19 @@ export function Console() {
         memory: target === null ? newChatMemory : undefined,
       });
       if (target !== null) {
-        setConv((cur) => (cur && cur.id === r.conversation_id ? { ...cur, messages: [...cur.messages, r] } : cur));
+        // A correction or approval in this message lands on the answer before it.
+        const flag = r.follow_up === "correction" ? -1 : r.follow_up === "approval" ? 1 : null;
+        setConv((cur) =>
+          cur && cur.id === r.conversation_id
+            ? {
+                ...cur,
+                messages: [
+                  ...cur.messages.map((x) => (flag !== null && x.id === r.follow_up_of ? { ...x, implicit_rating: flag } : x)),
+                  r,
+                ],
+              }
+            : cur,
+        );
       } else if (chatIdRef.current === null) {
         // Still on the new chat: open the chat that was just created.
         setConv(await api.conversation(r.conversation_id!));
@@ -446,7 +458,7 @@ function Turn({ m, busy, onRate, onRetry }: {
             </span>
           ) : null}
           {m.routing?.learned || /moved (up|down) to/.test(m.route_note ?? "") ? (
-            <span className="flag">routed by your ratings</span>
+            <span className="flag">routed by your feedback</span>
           ) : null}
         </div>
         {m.status === "ok" ? <Md>{m.response ?? ""}</Md> : <ErrorNote>{m.error}</ErrorNote>}
@@ -460,6 +472,14 @@ function Turn({ m, busy, onRate, onRetry }: {
                 <ThumbsDown size={15} aria-hidden />
               </IconButton>
               <CopyButton text={m.response ?? ""} />
+              {!m.rating && (m.implicit_rating === 1 || m.implicit_rating === -1) && (
+                <span
+                  className={`follow-note ${m.implicit_rating === 1 ? "good" : "bad"}`}
+                  title="Counts as part of a rating when routing similar prompts. Rate the answer yourself to replace it."
+                >
+                  {m.implicit_rating === 1 ? "Your next message approved this" : "Your next message corrected this"}
+                </span>
+              )}
             </>
           ) : (
             <button className="ghost small with-icon" onClick={() => onRetry(m.prompt)} disabled={busy}>

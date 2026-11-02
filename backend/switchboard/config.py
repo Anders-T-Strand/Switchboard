@@ -112,6 +112,9 @@ class LearnCfg(BaseModel):
     neighbors: int = 8           # similar past prompts looked up per message
     min_similarity: float = 0.8  # cosine similarity a past prompt needs to count as a vote
     min_votes: int = 3           # rated answers needed before the router moves
+    # A correction or approval read from your next message counts as this much of a rating.
+    # Your own rating of an answer always replaces it. 0 ignores follow-ups.
+    follow_up_weight: float = Field(0.5, ge=0, le=1)
 
 
 class RoutingCfg(BaseModel):

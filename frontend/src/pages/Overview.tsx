@@ -136,7 +136,7 @@ export function Overview({ days }: { days: number }) {
                     <th>Model</th>
                     <th className="num">Prompts</th>
                     <th>Effort</th>
-                    <th>Rated</th>
+                    <th>Feedback</th>
                     <th className="num">Tokens in</th>
                     <th className="num">Tokens out</th>
                     <th className="num">Median time</th>
@@ -153,7 +153,14 @@ export function Overview({ days }: { days: number }) {
                       </td>
                       <td className="effort-mix">{effortMix(m, config?.efforts ?? [])}</td>
                       <td className="effort-mix">
-                        {m.rated_good || m.rated_bad ? `${int(m.rated_good)} good, ${int(m.rated_bad)} bad` : "–"}
+                        {m.rated_good || m.rated_bad
+                          ? `Rated ${int(m.rated_good)} good, ${int(m.rated_bad)} bad`
+                          : !m.follow_up_good && !m.follow_up_bad && "–"}
+                        {(m.follow_up_good > 0 || m.follow_up_bad > 0) && (
+                          <span className="muted block small">
+                            Follow-ups {int(m.follow_up_good)} approved, {int(m.follow_up_bad)} corrected
+                          </span>
+                        )}
                       </td>
                       <td className="num">{compact(m.input_tokens)}</td>
                       <td className="num">{compact(m.output_tokens)}</td>

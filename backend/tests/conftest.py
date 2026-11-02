@@ -73,7 +73,8 @@ def fake_embedding(text: str, dim: int = 64) -> list[float]:
 
 class FakeOllama:
     """Classifier labels: "C<n> R<n>" in the prompt sets complexity and reasoning directly.
-    Otherwise HARD -> code 4/4, EXPERT -> analysis 5/5, anything else -> chat 1/1."""
+    Otherwise HARD -> code 4/4, EXPERT -> analysis 5/5, anything else -> chat 1/1.
+    Follow-ups: WRONG in the new prompt reads as a correction, THANKS as an approval."""
 
     def __init__(self):
         self.loaded = ["qwen3.6:35b-a3b"]
@@ -114,6 +115,8 @@ class FakeOllama:
                     label = {"task_type": "code", "complexity": 4, "reasoning": 4, "reason": "hard code"}
                 else:
                     label = {"task_type": "chat", "complexity": 1, "reasoning": 1, "reason": "trivial"}
+                new = user.split("Prompt to classify:", 1)[-1]
+                label["follow_up"] = "correction" if "WRONG" in new else "approval" if "THANKS" in new else "neutral"
                 content = json.dumps(label)
             else:
                 content = f"<think>hmm</think>local answer from {body['model']}"

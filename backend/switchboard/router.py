@@ -45,7 +45,19 @@ If earlier conversation is shown, rate the new prompt in that context. A short f
 Rate complexity and reasoning separately. A polished speech in a famous writer's style can be
 complexity 5 and reasoning 1. Finding an off-by-one error in a short loop can be complexity 2 and reasoning 4.
 Judge by how hard the prompt is to answer well, not by how long it is.
-Reply with JSON only: {"task_type": ..., "complexity": ..., "reasoning": ..., "reason": "<one short sentence>"}"""
+
+follow_up is how the new prompt reacts to the previous answer, when earlier conversation is shown:
+- correction: says the answer was wrong, didn't work or missed the point, or asks the same thing again
+  because it wasn't answered
+- approval: says the answer worked, was right or was what they needed
+- neutral: anything else, including new questions, building on the answer, and asking for a different
+  length, tone or format
+With no earlier conversation shown, follow_up is neutral.
+
+Reply with JSON only:
+{"task_type": ..., "complexity": ..., "reasoning": ..., "follow_up": ..., "reason": "<one short sentence>"}"""
+
+FOLLOW_UPS = ["neutral", "correction", "approval"]
 
 CLASSIFIER_SCHEMA = {
     "type": "object",
@@ -53,9 +65,10 @@ CLASSIFIER_SCHEMA = {
         "task_type": {"type": "string", "enum": TASK_TYPES},
         "complexity": {"type": "integer", "minimum": 1, "maximum": 5},
         "reasoning": {"type": "integer", "minimum": 1, "maximum": 5},
+        "follow_up": {"type": "string", "enum": FOLLOW_UPS},
         "reason": {"type": "string"},
     },
-    "required": ["task_type", "complexity", "reasoning", "reason"],
+    "required": ["task_type", "complexity", "reasoning", "follow_up", "reason"],
 }
 
 
@@ -112,6 +125,9 @@ class Classification:
     source: str  # model | heuristic
     model: str | None = None
     ms: int = 0
+    # How the prompt reacts to the previous answer: correction | approval | neutral.
+    # None when there was no previous answer or the heuristic classified it.
+    follow_up: str | None = None
 
 
 @dataclass
@@ -208,7 +224,8 @@ def heuristic_classify(prompt: str) -> Classification:
     return Classification(task, complexity, reasoning, f"heuristic: {n} chars, keyword match", "heuristic")
 
 
-def parse_classifier_json(text: str) -> tuple[str, int, int, str]:
+def parse_classifier_json(text: str) -> tuple[str, int, int, str, str]:
+    """(task_type, complexity, reasoning, reason, follow_up) from the classifier's reply."""
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         raise ValueError("no JSON object in classifier output")
@@ -219,7 +236,10 @@ def parse_classifier_json(text: str) -> tuple[str, int, int, str]:
     complexity = max(1, min(5, int(data.get("complexity", 3))))
     reasoning = max(1, min(5, int(data.get("reasoning", complexity))))
     reason = str(data.get("reason", "")).strip()[:300]
-    return task, complexity, reasoning, reason
+    follow_up = str(data.get("follow_up", "neutral")).lower().strip()
+    if follow_up not in FOLLOW_UPS:
+        follow_up = "neutral"
+    return task, complexity, reasoning, reason, follow_up
 
 
 # Router -----------------------------------------------------------------------
@@ -275,9 +295,10 @@ class Router:
                 options={**(model.options or {}), "temperature": 0},
                 timeout=ccfg.timeout_s,
             )
-            task, complexity, reasoning, reason = parse_classifier_json(comp.text)
+            task, complexity, reasoning, reason, follow_up = parse_classifier_json(comp.text)
             return Classification(task, complexity, reasoning, reason, "model", key,
-                                  int((time.perf_counter() - t0) * 1000))
+                                  int((time.perf_counter() - t0) * 1000),
+                                  follow_up=follow_up if context else None)
         except (ProviderError, ValueError) as e:
             # A short follow-up says little on its own, so rate it together with what it follows.
             c = heuristic_classify(f"{context[0]}\n{prompt}" if context and len(prompt) < 200 else prompt)
@@ -325,44 +346,69 @@ class Router:
             return None
         return effort != "low"
 
-    # Learning from ratings ------------------------------------------------------------
+    # Learning from ratings and follow-ups ----------------------------------------------
 
     def apply_learning(self, plan: RoutePlan) -> None:
-        """Move up or down routing.learn.ladder when similar past prompts were rated.
+        """Move up or down routing.learn.ladder based on how answers to similar past prompts went.
 
-        Up: the current model's answers to similar prompts were mostly rated bad (at least min_votes).
-        Down: a cheaper model has at least min_votes good ratings on similar prompts and no bad ones.
+        Each similar answer is one vote: your rating if you rated it, otherwise what your next message
+        said about it (a correction or an approval), counted at learn.follow_up_weight.
+        Up: the current model's votes are mostly bad and add up to at least min_votes.
+        Down: a cheaper model's good votes add up to at least min_votes and it has no bad ones.
         """
         learn = self.cfg.routing.learn
         if not learn.enabled or plan.chosen not in learn.ladder:
             return
-        votes = {m: {"good": 0, "bad": 0} for m in learn.ladder}
+        votes = {m: {"good": 0.0, "bad": 0.0, "rated_good": 0, "rated_bad": 0, "flag_good": 0, "flag_bad": 0}
+                 for m in learn.ladder}
         for n in plan.neighbors:
-            if n["score"] >= learn.min_similarity and n["rating"] in (1, -1) and n["model_key"] in votes:
-                votes[n["model_key"]]["good" if n["rating"] == 1 else "bad"] += 1
+            if n["score"] < learn.min_similarity or n["model_key"] not in votes:
+                continue
+            v = votes[n["model_key"]]
+            if n.get("rating") in (1, -1):
+                side, weight, kind = ("good" if n["rating"] == 1 else "bad"), 1.0, "rated"
+            elif learn.follow_up_weight > 0 and n.get("implicit_rating") in (1, -1):
+                side, weight, kind = ("good" if n["implicit_rating"] == 1 else "bad"), learn.follow_up_weight, "flag"
+            else:
+                continue
+            v[side] += weight
+            v[f"{kind}_{side}"] += 1
+
+        def enough(total: float) -> bool:
+            return total >= learn.min_votes - 1e-9  # weights like 0.3 don't add up exactly
 
         def clearly_bad(m: str) -> bool:
             v = votes[m]
-            return v["bad"] >= learn.min_votes and v["bad"] > v["good"]
+            return enough(v["bad"]) and v["bad"] > v["good"]
+
+        def evidence(m: str, side: str) -> str:
+            v = votes[m]
+            parts = []
+            if v[f"rated_{side}"]:
+                n = v[f"rated_{side}"]
+                parts.append(f"{n} {side} {'rating' if n == 1 else 'ratings'}")
+            if v[f"flag_{side}"]:
+                n = v[f"flag_{side}"]
+                word = "correction" if side == "bad" else "approval"
+                parts.append(f"{n} {word}{'' if n == 1 else 's'} in your follow-ups")
+            return f"answers from {self.cfg.label(m)} to similar prompts got {' and '.join(parts)}"
 
         current = plan.chosen
         i = learn.ladder.index(current)
-        v = votes[current]
         if clearly_bad(current):
             for nxt in learn.ladder[i + 1:]:
                 if not clearly_bad(nxt):
                     plan.chosen = nxt
-                    reason = (f"{v['bad']} of {v['good'] + v['bad']} rated answers from {self.cfg.label(current)} "
-                              "to similar prompts were bad")
+                    reason = evidence(current, "bad")
                     plan.learned = {"from": current, "to": nxt, "direction": "up", "reason": reason}
                     plan.notes.append(f"moved up to {self.cfg.label(nxt)}: {reason}")
                     return
         else:
             for cheaper in learn.ladder[:i]:
                 cv = votes[cheaper]
-                if cv["good"] >= learn.min_votes and cv["bad"] == 0:
+                if enough(cv["good"]) and cv["bad"] == 0:
                     plan.chosen = cheaper
-                    reason = f"{cv['good']} answers from {self.cfg.label(cheaper)} to similar prompts were rated good"
+                    reason = evidence(cheaper, "good")
                     plan.learned = {"from": current, "to": cheaper, "direction": "down", "reason": reason}
                     plan.notes.append(f"moved down to {self.cfg.label(cheaper)}: {reason}")
                     return

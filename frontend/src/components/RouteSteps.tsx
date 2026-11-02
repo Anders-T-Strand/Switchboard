@@ -1,5 +1,5 @@
 import { ThumbsDown, ThumbsUp } from "lucide-react";
-import type { MemoryRef, Neighbor, RequestDetail, RoutePlan } from "../api";
+import type { FollowUp, MemoryRef, Neighbor, RequestDetail, RoutePlan } from "../api";
 import { capitalize, compact, duration, effortLabel, usd } from "../format";
 import { useApp } from "../hooks";
 import { ModelTag } from "./bits";
@@ -13,6 +13,7 @@ export type RouteView = {
   classifierModel: string | null;
   classifierMs: number | null;
   reason: string | null;
+  followUp: FollowUp | null;
   rule: string | null;
   routed: string | null;
   answeredBy: string | null;
@@ -35,6 +36,7 @@ export function fromPlan(p: RoutePlan): RouteView {
     classifierModel: c?.model ?? null,
     classifierMs: c?.ms ?? null,
     reason: c?.reason ?? null,
+    followUp: c?.follow_up ?? null,
     rule: p.rule,
     routed: p.routed,
     answeredBy: p.chosen,
@@ -57,6 +59,7 @@ export function fromDetail(d: RequestDetail): RouteView {
     classifierModel: d.classifier_model,
     classifierMs: d.classifier_ms,
     reason: d.classifier_reason,
+    followUp: d.follow_up ?? null,
     rule: d.rule,
     routed: d.routed_model,
     answeredBy: d.model_key,
@@ -109,6 +112,14 @@ export function RouteSteps({ view, pending = false }: { view: RouteView; pending
                 : `by ${label(view.classifierModel)} in ${duration(view.classifierMs)}`}
             </span>
             {view.reason && <span className="reason">{view.reason}</span>}
+            {(view.followUp === "correction" || view.followUp === "approval") && (
+              <span className={`reason follow-up ${view.followUp === "correction" ? "bad" : "good"}`}>
+                {view.followUp === "correction"
+                  ? "Read as a correction of the previous answer"
+                  : "Read as approval of the previous answer"}
+                , which counts toward routing similar prompts
+              </span>
+            )}
           </span>
         )}
       </li>
@@ -130,13 +141,13 @@ export function RouteSteps({ view, pending = false }: { view: RouteView; pending
         <li>
           <span className="step-name">Similar</span>
           <span>
-            <span className="muted">Closest past prompts, and how you rated their answers</span>
+            <span className="muted">Closest past prompts, and how their answers went</span>
             <ul className="neighbors">
               {view.neighbors.slice(0, 3).map((n) => (
                 <li key={n.request_id}>
                   <span className="nb-score" title="Cosine similarity">{n.score.toFixed(2)}</span>
                   <ModelTag modelKey={n.model_key} />
-                  <Rated rating={n.rating} />
+                  <Rated rating={n.rating} implicit={n.implicit_rating} />
                   <a className="nb-prompt" href={`#/console?c=${n.conversation_id}`} title={n.prompt}>{n.prompt}</a>
                 </li>
               ))}
@@ -176,9 +187,21 @@ export function RouteSteps({ view, pending = false }: { view: RouteView; pending
   );
 }
 
-function Rated({ rating }: { rating: number | null }) {
+function Rated({ rating, implicit }: { rating: number | null; implicit?: number | null }) {
   if (rating === 1) return <ThumbsUp size={13} className="rated good" aria-label="rated good" />;
   if (rating === -1) return <ThumbsDown size={13} className="rated bad" aria-label="rated bad" />;
+  if (implicit === 1 || implicit === -1) {
+    const good = implicit === 1;
+    return (
+      <span
+        className={`rated implicit ${good ? "good" : "bad"}`}
+        title={good ? "Not rated, but your next message approved it" : "Not rated, but your next message corrected it"}
+      >
+        {good ? <ThumbsUp size={12} aria-hidden /> : <ThumbsDown size={12} aria-hidden />}
+        {good ? "approved" : "corrected"}
+      </span>
+    );
+  }
   return <span className="muted small">not rated</span>;
 }
 

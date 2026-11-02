@@ -42,7 +42,7 @@ def summary(cfg: Config, days: int) -> dict:
     with connect() as conn:
         reqs = rows(conn.execute(
             """SELECT model_key, provider, status, fell_back, task_type, complexity, reasoning, route_mode,
-                      effort, think, rating,
+                      effort, think, rating, implicit_rating,
                       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                       latency_ms, cost_usd, avoided_usd
                FROM requests WHERE created_at >= ?""",
@@ -71,11 +71,17 @@ def summary(cfg: Config, days: int) -> dict:
             "cost_usd": 0.0, "avoided_usd": 0.0, "_lat": [],
             "efforts": defaultdict(int), "thinking": 0, "think_known": 0,
             "rated_good": 0, "rated_bad": 0,
+            # Read from your next message, counted only where you didn't rate the answer yourself.
+            "follow_up_good": 0, "follow_up_bad": 0,
         })
         if r["rating"] == 1:
             b["rated_good"] += 1
         elif r["rating"] == -1:
             b["rated_bad"] += 1
+        elif r["implicit_rating"] == 1:
+            b["follow_up_good"] += 1
+        elif r["implicit_rating"] == -1:
+            b["follow_up_bad"] += 1
         b["requests"] += 1
         if r["status"] != "ok":
             b["errors"] += 1

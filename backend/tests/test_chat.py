@@ -125,6 +125,52 @@ def test_ratings(client):
     assert by["qwen-moe"]["rated_good"] == 1
 
 
+def turn_by_id(client, cid, rid):
+    return next(m for m in client.get(f"/api/conversations/{cid}").json()["messages"] if m["id"] == rid)
+
+
+def test_follow_ups_flag_the_previous_answer(client):
+    first = send(client, "explain python decorators")
+    cid = first["conversation_id"]
+    assert first["follow_up"] is None  # nothing to react to yet
+
+    wrong = send(client, "WRONG, that example doesn't run", cid)
+    assert wrong["follow_up"] == "correction" and wrong["follow_up_of"] == first["id"]
+    assert turn_by_id(client, cid, first["id"])["implicit_rating"] == -1
+
+    thanks = send(client, "THANKS, that one works", cid)
+    assert thanks["follow_up"] == "approval"
+    assert turn_by_id(client, cid, wrong["id"])["implicit_rating"] == 1
+
+    neutral = send(client, "now show a class decorator", cid)
+    assert neutral["follow_up"] == "neutral" and neutral["follow_up_of"] == thanks["id"]
+    assert turn_by_id(client, cid, thanks["id"])["implicit_rating"] is None
+
+    # Your own rating sits next to the flag and takes its place in the stats.
+    client.put(f"/api/requests/{first['id']}/rating", json={"rating": 1})
+    by = {m["model_key"]: m for m in client.get("/api/stats/summary").json()["by_model"]}
+    assert by["qwen-moe"]["rated_good"] == 1 and by["qwen-moe"]["follow_up_bad"] == 0
+    assert by["qwen-moe"]["follow_up_good"] == 1  # the second answer, approved and not rated
+
+    turns = [json.loads(line) for line in client.get("/api/export.jsonl?format=turns").text.splitlines()]
+    assert [t["follow_up"] for t in turns] == [None, "correction", "approval", "neutral"]
+    assert turns[0]["implicit_rating"] == -1 and turns[0]["rating"] == 1
+
+
+def test_follow_up_ignored_without_a_fresh_answer(client):
+    # A reply right after a failed turn isn't pinned on the older answer before it.
+    first = send(client, "explain monads")
+    cid = first["conversation_id"]
+    failed = send(client, "please FAIL now", cid, model="claude-sonnet")
+    assert failed["status"] == "error"
+    after = send(client, "WRONG, try again", cid)
+    assert after["follow_up"] is None and after["follow_up_of"] is None
+    assert turn_by_id(client, cid, first["id"])["implicit_rating"] is None
+    # With model and effort both picked by hand the classifier doesn't run, so nothing is read.
+    hand = send(client, "WRONG again", cid, model="qwen-moe", effort="low")
+    assert hand["follow_up"] is None
+
+
 def test_export(client):
     cid = send(client, "first question")["conversation_id"]
     second = send(client, "HARD follow up", cid)

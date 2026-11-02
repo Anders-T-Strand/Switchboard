@@ -66,15 +66,18 @@ routing:
   # Tried in order when the routed model fails (Ollama down, claude not logged in, usage limit hit...).
   fallback_order: [claude-sonnet, qwen-moe]
 
-  # Learning from your ratings. Each new prompt is compared with past prompts in the vector index.
-  # If answers from the routed model to similar prompts were mostly rated bad, it moves up the ladder.
-  # If a cheaper model's answers to similar prompts were rated good (and none bad), it moves down.
+  # Learning from your ratings and follow-ups. Each new prompt is compared with past prompts in the vector index.
+  # If answers from the routed model to similar prompts were mostly bad, it moves up the ladder.
+  # If a cheaper model's answers to similar prompts were good (and none bad), it moves down.
+  # An answer you didn't rate can still count: the classifier reads whether your next message
+  # corrected it ("that's wrong", the same question again) or approved it ("that worked").
   learn:
     enabled: true
     ladder: [qwen-moe, claude-sonnet, claude-opus]   # cheapest first
     neighbors: 8          # similar past prompts looked up per message
     min_similarity: 0.80  # how close a past prompt must be to count
     min_votes: 3          # ratings needed before the router moves
+    follow_up_weight: 0.5 # a correction or approval counts as half a rating. 0 ignores them
 
   # Complexity picks the model. Reasoning picks how hard it thinks.
   # Claude gets the effort level (overrides your own /effort setting, for that call only).

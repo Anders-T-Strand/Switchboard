@@ -35,12 +35,15 @@ def test_invalid_config_is_rejected(cfg):
 
 
 def test_parse_classifier_json_tolerates_noise():
-    task, cx, rs, reason = parse_classifier_json(
-        'Sure:\n```json\n{"task_type": "CODE", "complexity": 9, "reasoning": 2, "reason": "x"}\n```'
+    parsed = parse_classifier_json(
+        'Sure:\n```json\n{"task_type": "CODE", "complexity": 9, "reasoning": 2, "follow_up": "Correction", '
+        '"reason": "x"}\n```'
     )
-    assert (task, cx, rs, reason) == ("code", 5, 2, "x")
-    task, cx, rs, _ = parse_classifier_json('{"task_type": "weird", "complexity": 0, "reason": ""}')
+    assert parsed == ("code", 5, 2, "x", "correction")
+    task, cx, rs, _, follow_up = parse_classifier_json('{"task_type": "weird", "complexity": 0, "reason": ""}')
     assert (task, cx, rs) == ("other", 1, 1)  # missing reasoning falls back to complexity
+    assert follow_up == "neutral"
+    assert parse_classifier_json('{"complexity": 2, "follow_up": "angry"}')[4] == "neutral"
 
 
 def test_heuristic_classifier():
@@ -69,7 +72,7 @@ def test_classifier_uses_loaded_model_and_disables_thinking(cfg, fake_ollama):
     call = fake_ollama.chat_calls[-1]
     assert call["model"] == "qwen3.8:27b"
     assert call["think"] is False
-    assert call["format"]["required"] == ["task_type", "complexity", "reasoning", "reason"]
+    assert call["format"]["required"] == ["task_type", "complexity", "reasoning", "follow_up", "reason"]
 
 
 def test_prefer_loaded_local_avoids_swap(cfg, fake_ollama):

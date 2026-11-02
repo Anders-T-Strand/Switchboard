@@ -246,7 +246,10 @@ export function Models({ onSynced }: { onSynced: () => void }) {
                     {r.learn.enabled && r.learn.ladder.length ? (
                       <>
                         Moves along {r.learn.ladder.map(label).join(", then ")} once {r.learn.min_votes} similar
-                        prompts (similarity {r.learn.min_similarity} or more) were rated
+                        prompts (similarity {r.learn.min_similarity} or more) were rated.{" "}
+                        {r.learn.follow_up_weight > 0
+                          ? `A correction or approval in your next message counts as ${r.learn.follow_up_weight} of a rating`
+                          : "Follow-ups are ignored"}
                       </>
                     ) : (
                       "Off"

@@ -11,7 +11,7 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 ## Highlights
 
 - **Two-axis routing.** A local classifier rates each prompt for complexity (which model) and reasoning (how much thinking) separately, so a prompt can run on Opus at low effort or on Sonnet at extra high.
-- **A router that learns from ratings.** New prompts are matched against rated past prompts in a Qdrant vector index. If a model's answers to similar prompts were rated bad, the prompt moves up a model ladder. If a cheaper model's were rated good, it moves down.
+- **A router that learns from your feedback.** New prompts are matched against past prompts in a Qdrant vector index. Thumbs up or down count as votes, and so does your next message when it says an answer was wrong or that it worked. If a model's answers to similar prompts went badly, the prompt moves up a model ladder. If a cheaper model's went well, it moves down.
 - **One chat, several models.** A conversation can move between the local model and Claude, with history passed along in the form each one takes, and follow-ups rated in the context of what they refer to.
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
@@ -41,7 +41,7 @@ flowchart TB
 - **Built around one GPU.** The classifier runs on whichever local model is already loaded, a loaded model answers instead of swapping in another, and every Ollama call uses the same context size, because Ollama reloads a model when that changes.
 - **Complexity and reasoning are separate ratings.** How capable a model needs to be and how long it should think are different questions. Mapping them to model and effort separately keeps strong models from overthinking easy-but-delicate prompts.
 - **SQLite is the record, Qdrant is derived.** Vectors can be rebuilt at any time. Each indexed turn records which embedding model made it, so changing models re-indexes, and a missing or resized collection is recreated from SQLite.
-- **Learning only acts on explicit ratings.** Copying the classifier's past choices would just reinforce them. Moves need several similar, rated answers, and every move is shown with the prompts and ratings behind it.
+- **Learning comes from you, not from the models grading themselves.** A model judging its own answers would confirm its own mistakes, and having Claude grade every answer would cost a Claude call per prompt. So the votes are your ratings, plus corrections and approvals the classifier reads from your next message. Those count as half a rating, since they're an inference, and your own rating always replaces them. Moves need several similar votes, and every move is shown with the prompts behind it.
 - **History is shaped per provider.** Ollama gets earlier turns as chat messages. Claude gets a transcript in its system prompt, which also covers turns another model answered. Both are trimmed oldest first to a per-provider budget.
 
 ## Tech stack
@@ -76,8 +76,8 @@ Every prompt belongs to a chat, including ones sent from the terminal, so any ea
 
 - **Each turn is routed on its own.** The classifier sees the previous exchange, so a short follow-up like "why?" or "make it shorter" is rated as hard as the work it refers to instead of as trivial.
 - **History travels with the model.** Local models get earlier turns as chat messages. Claude gets them as a transcript in its system prompt, which works even when earlier replies came from Qwen. The oldest turns are left out first once a chat outgrows `chat.history_chars`, and the route note says when that happened.
-- **Rate answers.** Thumbs up or down on each answer. The ratings are counted per model on the Overview, and the router learns from them (see below).
-- **Download the history.** The chat list links to two JSON Lines files: whole chats, and one line per turn with the routing decision, the outcome, the previous prompt and your rating.
+- **Rate answers, or just reply.** Thumbs up or down on each answer. If you don't rate one but your next message says it was wrong ("that doesn't work", the same question again) or that it worked, the answer is marked corrected or approved. Both are counted per model on the Overview, and the router learns from them (see below).
+- **Download the history.** The chat list links to two JSON Lines files: whole chats, and one line per turn with the routing decision, the outcome, the previous prompt, your rating and what your next message said about the answer.
 
 Prompts sent before chats existed were turned into one-turn chats the first time the server started, so they can be continued too.
 
@@ -88,7 +88,7 @@ Every answered turn is embedded through Ollama (`qwen3-embedding:0.6b` by defaul
 The index is used for three things:
 
 - **Search by meaning.** Chat search ranks chats by meaning and by matching words together (reciprocal rank fusion), so "that vacuum thing in Postgres" finds the autovacuum chat.
-- **A router that learns from your ratings.** Each new prompt is compared with past prompts. If the routed model's answers to similar prompts were mostly rated bad (at least `min_votes` of them), the prompt moves up `routing.learn.ladder`, for example from Qwen to Sonnet. If a cheaper model's answers to similar prompts were rated good and none bad, it moves down. "How it was routed" lists the closest past prompts with their ratings, and the answer is tagged when ratings changed the route. It only acts on ratings, so it does nothing until you rate some answers.
+- **A router that learns from your feedback.** Each new prompt is compared with past prompts. Every similar answer you rated is a vote, and an answer you didn't rate still counts at `follow_up_weight` (half by default) when your next message corrected or approved it. If the routed model's votes were mostly bad and add up to at least `min_votes`, the prompt moves up `routing.learn.ladder`, for example from Qwen to Sonnet. If a cheaper model's good votes reach `min_votes` with no bad ones, it moves down. "How it was routed" lists the closest past prompts with how their answers went, and the answer is tagged when feedback changed the route. The follow-up reading costs nothing extra, because it's one more field in the classifier call every message already makes.
 - **Memory.** Turn on Memory for a chat in the Console, and each message brings up to four related turns from your other chats into the system prompt, for local models and Claude alike. The answer is tagged with how many it used, and "How it was routed" links to them.
 
 ### Running Qdrant
@@ -111,7 +111,7 @@ The embedding model is small (about 640 MB) and stays loaded next to your chat m
 
 ## What it tracks
 
-- **Chats and router requests.** Prompt, answer, classification, rule, model, effort, context sent along, tokens, latency, fallbacks and your rating, stored in SQLite.
+- **Chats and router requests.** Prompt, answer, classification, rule, model, effort, context sent along, tokens, latency, fallbacks, your rating and how your next message reacted, stored in SQLite.
 - **Claude Code usage.** Your own Claude Code sessions are read from `~/.claude/projects/**/*.jsonl` every minute, so the dashboard shows usage by model and day even for work done outside it. Calls the router makes through `claude -p` are tagged separately. Chats on claude.ai don't write local logs, so they can't be counted.
 - **Cost at API rates.** A Pro plan isn't billed per token, so costs are shown as what the same usage would cost on the Claude API. Local answers are priced against a reference model (Sonnet by default) to estimate what running locally kept off Claude. Local and Claude tokenizers differ, so treat that one as a ballpark.
 - **Tasks.** A simple to do / in progress / done board. Attach prompts to a task to see how many tokens each piece of work takes.
@@ -205,7 +205,7 @@ Everything lives in `config.yaml`. Restart the server after editing it.
 | `models` | Every model the router can use. `provider` is `ollama` or `claude_cli`. For Claude, `model` is the alias passed to `claude --model` and `max_effort` caps its effort. For Ollama, `think` pins thinking on or off. |
 | `routing.rules` | Ordered rules. Conditions: `task_types`, `min_complexity`, `max_complexity`, `min_reasoning`, `max_reasoning`. Effort: `effort` to pin it, `min_effort` and `max_effort` to clamp it. |
 | `index` | Qdrant location, collection, embedding model and how much text per turn gets embedded. `enabled: false` turns the vector index off. |
-| `routing.learn` | The model ladder for learning from ratings, how many similar prompts to look at, how close they must be, and how many ratings it takes to move. |
+| `routing.learn` | The model ladder for learning from feedback, how many similar prompts to look at, how close they must be, how many ratings it takes to move, and how much a correction or approval in a follow-up counts (`follow_up_weight`, 0 ignores them). |
 | `chat.memory` | How many turns from other chats a message can bring in, and how related they must be. |
 | `chat.history_chars` | How many characters of earlier conversation go along with each message, per provider. Keep the Ollama budget well under the `num_ctx` set on local models (16384 tokens by default). |
 | `routing.effort.by_reasoning` | Which effort level each reasoning rating gets. Leave a level out to use your own `/effort` setting for it. |

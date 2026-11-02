@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS requests (
   turn INTEGER,                      -- position in the conversation, from 1
   context_turns INTEGER,             -- earlier turns sent along with this prompt
   rating INTEGER,                    -- 1 good, -1 bad, NULL not rated
+  implicit_rating INTEGER,           -- 1 or -1 read from the user's next message, NULL if it said neither
+  follow_up TEXT,                    -- how this message reacts to the previous answer: correction | approval | neutral
+  follow_up_of INTEGER,              -- request id of that previous answer
   indexed_model TEXT,                -- embedding model this turn was indexed with in Qdrant
   neighbors TEXT,                    -- JSON: similar past prompts the router looked at
   memory_ids TEXT,                   -- JSON: turns from other chats added as memory
@@ -111,6 +114,9 @@ ADDED_COLUMNS = {
         ("indexed_model", "TEXT"),
         ("neighbors", "TEXT"),
         ("memory_ids", "TEXT"),
+        ("implicit_rating", "INTEGER"),
+        ("follow_up", "TEXT"),
+        ("follow_up_of", "INTEGER"),
     ],
     "conversations": [
         ("memory", "INTEGER NOT NULL DEFAULT 0"),

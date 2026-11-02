@@ -104,6 +104,55 @@ def test_good_ratings_move_similar_prompts_down(app):
     assert data["routing"]["learned"]["direction"] == "down"
 
 
+def corrected(client, prompt):
+    """Ask in a new chat, then say the answer was wrong."""
+    first = send(client, prompt)
+    send(client, "WRONG, that misses the timezone part", first["conversation_id"])
+    return first
+
+
+def test_corrections_count_as_half_votes(app):
+    prompt = "write a regex for iso dates with timezone offsets"
+    for _ in range(3):
+        corrected(app, prompt)
+    app.svc.index.index_all()
+    # 3 corrections at 0.5 each is 1.5, short of min_votes 2.
+    data = send(app, f"{prompt} please")
+    assert data["model_key"] == "qwen-moe" and data["routing"]["learned"] is None
+
+    corrected(app, prompt)  # 2.0 now
+    app.svc.index.index_all()
+    data = send(app, f"{prompt} please")
+    assert data["model_key"] == "claude-sonnet"
+    learned = data["routing"]["learned"]
+    assert learned["direction"] == "up"
+    assert "4 corrections in your follow-ups" in learned["reason"]
+    assert any(n["implicit_rating"] == -1 and n["rating"] is None for n in data["routing"]["neighbors"])
+
+
+def test_your_rating_replaces_the_follow_up(app):
+    prompt = "write a regex for iso dates with timezone offsets"
+    flagged = [corrected(app, prompt) for _ in range(4)]
+    rate(app, flagged[0]["id"], 1)  # you liked it after all: 3 corrections (1.5) and 1 good rating
+    app.svc.index.index_all()
+    assert send(app, f"{prompt} please")["model_key"] == "qwen-moe"
+
+
+def test_approvals_and_ratings_move_down_together(app, cfg):
+    prompt = "HARD explain python decorators with examples"
+    for _ in range(2):
+        first = send(app, prompt, model="qwen-moe")
+        send(app, "THANKS, that cleared it up", first["conversation_id"])
+    rate(app, send(app, prompt, model="qwen-moe")["id"], 1)
+    app.svc.index.index_all()
+    data = send(app, f"{prompt} again")
+    assert data["routed_model"] == "claude-sonnet" and data["model_key"] == "qwen-moe"
+    assert "1 good rating and 2 approvals in your follow-ups" in data["routing"]["learned"]["reason"]
+    # Weight 0 turns follow-ups off: one good rating alone isn't enough.
+    cfg.routing.learn.follow_up_weight = 0
+    assert send(app, f"{prompt} again")["model_key"] == "claude-sonnet"
+
+
 def test_learning_needs_enough_similar_votes(app):
     r = send(app, "write a regex for iso dates")
     rate(app, r["id"], -1)  # one vote, min_votes is 2

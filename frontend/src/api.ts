@@ -10,7 +10,11 @@ export type Classification = {
   source: "model" | "heuristic";
   model: string | null;
   ms: number;
+  follow_up: FollowUp | null;
 };
+
+/** How a message reacts to the answer before it, as read by the classifier. */
+export type FollowUp = "correction" | "approval" | "neutral";
 
 export type Neighbor = {
   request_id: number;
@@ -22,6 +26,7 @@ export type Neighbor = {
   model_key: string | null;
   effort: Effort | null;
   rating: number | null;
+  implicit_rating: number | null;
   created_at: string;
 };
 
@@ -102,6 +107,10 @@ export type RequestDetail = Omit<RequestRow, "prompt_preview"> & {
   context_turns: number | null;
   neighbors: Neighbor[];
   memory: MemoryRef[];
+  /** 1 or -1 read from your next message. Your own rating replaces it. */
+  implicit_rating: number | null;
+  follow_up: FollowUp | null;
+  follow_up_of: number | null;
   routing?: RoutePlan;
 };
 
@@ -156,6 +165,8 @@ export type ModelStats = {
   think_known: number;
   rated_good: number;
   rated_bad: number;
+  follow_up_good: number;
+  follow_up_bad: number;
 };
 
 export type CcBucket = {
@@ -268,7 +279,14 @@ export type ConfigView = {
     prefer_loaded_local: boolean;
     fallback_order: string[];
     effort: { by_reasoning: Record<string, Effort> };
-    learn: { enabled: boolean; ladder: string[]; neighbors: number; min_similarity: number; min_votes: number };
+    learn: {
+      enabled: boolean;
+      ladder: string[];
+      neighbors: number;
+      min_similarity: number;
+      min_votes: number;
+      follow_up_weight: number;
+    };
     rules: Rule[];
   };
   pricing: {
