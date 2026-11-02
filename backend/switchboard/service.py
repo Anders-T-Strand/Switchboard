@@ -7,6 +7,7 @@ from typing import Iterator
 
 from .config import Config
 from .db import connect, make_title, now_iso, rows
+from .index import TurnIndex, build_memory_block
 from .pricing import cost_usd, find_price, reference_cost
 from .providers import ClaudeCLI, OllamaClient, ProviderError
 from .router import Router, Turn
@@ -28,7 +29,8 @@ class Service:
         self.cfg = cfg
         self.ollama = OllamaClient(cfg.ollama)
         self.claude = ClaudeCLI(cfg.claude, cfg.claude_workdir)
-        self.router = Router(cfg, self.ollama, self.claude)
+        self.index = TurnIndex(cfg, self.ollama) if cfg.index.enabled else None
+        self.router = Router(cfg, self.ollama, self.claude, self.index)
 
     # Prompts -------------------------------------------------------------------
 
@@ -58,7 +60,7 @@ class Service:
 
     def run_prompt(self, prompt: str, model: str = "auto", task_id: int | None = None,
                    system_prompt: str | None = None, effort: str = "auto",
-                   conversation_id: int | None = None) -> dict:
+                   conversation_id: int | None = None, memory: bool | None = None) -> dict:
         """Route and answer one message. Without a conversation_id a new chat is started,
         so every prompt can be picked up again later."""
         if task_id is not None:
@@ -68,7 +70,17 @@ class Service:
         history = self._history(conversation_id) if conversation_id is not None else []
         plan = self._plan(prompt, model, effort, history[-1] if history else None)
         if conversation_id is None:
-            conversation_id = self._create_conversation(prompt)
+            conversation_id = self._create_conversation(prompt, bool(memory))
+        elif memory is not None:
+            self._set_memory(conversation_id, memory)
+
+        # Memory: relevant turns from other chats go along in the system prompt.
+        memory_items: list[dict] = []
+        if self.index is not None and self._memory_on(conversation_id):
+            # A short follow-up says little on its own, so search with the previous message too.
+            query = f"{history[-1][0]}\n{prompt}" if history else prompt
+            memory_items = self.index.memory(query, exclude_conversation=conversation_id)
+        extra_context = build_memory_block(memory_items, self.cfg.chat.memory.max_chars)
 
         c = plan.classification
         rec: dict = {
@@ -76,6 +88,12 @@ class Service:
             "task_id": task_id,
             "conversation_id": conversation_id,
             "context_turns": None,
+            "neighbors": json.dumps(plan.neighbors) if plan.neighbors else None,
+            "memory_ids": json.dumps([
+                {"request_id": m["id"], "conversation_id": m["conversation_id"], "turn": m["turn"],
+                 "title": m["title"], "score": m["score"]}
+                for m in memory_items
+            ]) if memory_items else None,
             "prompt": prompt,
             "system_prompt": system_prompt,
             "route_mode": plan.mode,
@@ -110,7 +128,7 @@ class Service:
         notes = list(plan.notes)
 
         try:
-            comp, used, errors = self.router.execute(plan, prompt, system_prompt, history)
+            comp, used, errors = self.router.execute(plan, prompt, system_prompt, history, extra_context)
         except ProviderError as e:
             rec["status"] = "error"
             rec["error"] = str(e)
@@ -156,6 +174,8 @@ class Service:
             marks = ", ".join(f":{k}" for k in rec)
             rec_id = conn.execute(f"INSERT INTO requests ({cols}) VALUES ({marks})", rec).lastrowid
             conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (rec["created_at"], conversation_id))
+        if self.index is not None and rec["status"] == "ok":
+            self.index.wake.set()  # index the new turn now instead of on the next timer
         return self.get_request(rec_id) | {"routing": plan.to_dict(self.cfg)}
 
     def rate(self, rec_id: int, rating: int) -> dict:
@@ -169,36 +189,73 @@ class Service:
 
     # Conversations -------------------------------------------------------------
 
-    def _create_conversation(self, first_prompt: str) -> int:
+    def _create_conversation(self, first_prompt: str, memory: bool = False) -> int:
         ts = now_iso()
         with connect() as conn:
             return conn.execute(
-                "INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
-                (make_title(first_prompt), ts, ts),
+                "INSERT INTO conversations (title, memory, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (make_title(first_prompt), int(memory), ts, ts),
             ).lastrowid
 
-    def list_conversations(self, q: str | None = None, limit: int = 50, offset: int = 0) -> dict:
-        where, params = "", []
-        if q and q.strip():
-            like = _like(q.strip())
-            where = """WHERE c.title LIKE ? ESCAPE '\\' OR EXISTS (
-                         SELECT 1 FROM requests x WHERE x.conversation_id = c.id
-                         AND (x.prompt LIKE ? ESCAPE '\\' OR x.response LIKE ? ESCAPE '\\'))"""
-            params = [like, like, like]
+    def _set_memory(self, cid: int, on: bool) -> None:
         with connect() as conn:
-            total = conn.execute(f"SELECT COUNT(*) FROM conversations c {where}", params).fetchone()[0]
-            items = rows(conn.execute(
-                f"""SELECT c.id, c.title, c.created_at, c.updated_at,
-                      (SELECT COUNT(*) FROM requests r WHERE r.conversation_id = c.id) AS turns,
-                      (SELECT r.model_key FROM requests r WHERE r.conversation_id = c.id
-                         ORDER BY r.turn DESC, r.id DESC LIMIT 1) AS last_model,
-                      (SELECT r.status FROM requests r WHERE r.conversation_id = c.id
-                         ORDER BY r.turn DESC, r.id DESC LIMIT 1) AS last_status
-                    FROM conversations c {where}
-                    ORDER BY c.updated_at DESC, c.id DESC LIMIT ? OFFSET ?""",
-                [*params, limit, offset],
-            ))
-        return {"total": total, "items": items}
+            if conn.execute("UPDATE conversations SET memory = ? WHERE id = ?", (int(on), cid)).rowcount == 0:
+                raise NotFound(f"chat {cid} not found")
+
+    def _memory_on(self, cid: int) -> bool:
+        with connect() as conn:
+            row = conn.execute("SELECT memory FROM conversations WHERE id = ?", (cid,)).fetchone()
+        return bool(row and row["memory"])
+
+    _SUMMARY = """SELECT c.id, c.title, c.memory, c.created_at, c.updated_at,
+                    (SELECT COUNT(*) FROM requests r WHERE r.conversation_id = c.id) AS turns,
+                    (SELECT r.model_key FROM requests r WHERE r.conversation_id = c.id
+                       ORDER BY r.turn DESC, r.id DESC LIMIT 1) AS last_model,
+                    (SELECT r.status FROM requests r WHERE r.conversation_id = c.id
+                       ORDER BY r.turn DESC, r.id DESC LIMIT 1) AS last_status
+                  FROM conversations c"""
+
+    def list_conversations(self, q: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+        """Newest first. With a query: chats that match by meaning (vector index) come first,
+        then chats whose title or messages contain the words."""
+        q = (q or "").strip()
+        if not q:
+            with connect() as conn:
+                total = conn.execute("SELECT COUNT(*) FROM conversations").fetchone()[0]
+                items = rows(conn.execute(
+                    f"{self._SUMMARY} ORDER BY c.updated_at DESC, c.id DESC LIMIT ? OFFSET ?", (limit, offset)
+                ))
+            return {"total": total, "items": items, "search": None}
+
+        by_meaning: list[int] = []
+        searched_meaning = self.index is not None and self.index.ready()
+        if searched_meaning:
+            by_meaning = [cid for cid, _ in self.index.search_conversations(q)]
+        like = _like(q)
+        with connect() as conn:
+            by_words = [r[0] for r in conn.execute(
+                """SELECT c.id FROM conversations c
+                   WHERE c.title LIKE ? ESCAPE '\\' OR EXISTS (
+                     SELECT 1 FROM requests x WHERE x.conversation_id = c.id
+                     AND (x.prompt LIKE ? ESCAPE '\\' OR x.response LIKE ? ESCAPE '\\'))
+                   ORDER BY c.updated_at DESC, c.id DESC""",
+                (like, like, like),
+            )]
+        meaning_set = set(by_meaning)
+        ordered = by_meaning + [cid for cid in by_words if cid not in meaning_set]
+        page = ordered[offset: offset + limit]
+        found: dict[int, dict] = {}
+        if page:
+            with connect() as conn:
+                for r in rows(conn.execute(
+                    f"{self._SUMMARY} WHERE c.id IN ({','.join('?' * len(page))})", page
+                )):
+                    found[r["id"]] = r | {"match": "meaning" if r["id"] in meaning_set else "words"}
+        return {
+            "total": len(ordered),
+            "items": [found[cid] for cid in page if cid in found],
+            "search": "meaning and words" if searched_meaning else "words",
+        }
 
     def get_conversation(self, cid: int) -> dict:
         with connect() as conn:
@@ -213,20 +270,28 @@ class Service:
             ))
         return dict(conv) | {"messages": [self._decorate(m) for m in messages]}
 
-    def rename_conversation(self, cid: int, title: str) -> dict:
-        title = " ".join(title.split())
-        if not title:
-            raise ValueError("title can't be empty")
-        with connect() as conn:
-            if conn.execute("UPDATE conversations SET title = ? WHERE id = ?", (title[:200], cid)).rowcount == 0:
-                raise NotFound(f"chat {cid} not found")
+    def update_conversation(self, cid: int, title: str | None = None, memory: bool | None = None) -> dict:
+        if title is not None:
+            title = " ".join(title.split())
+            if not title:
+                raise ValueError("title can't be empty")
+            with connect() as conn:
+                if conn.execute("UPDATE conversations SET title = ? WHERE id = ?", (title[:200], cid)).rowcount == 0:
+                    raise NotFound(f"chat {cid} not found")
+        if memory is not None:
+            self._set_memory(cid, memory)
         return self.get_conversation(cid)
+
+    def rename_conversation(self, cid: int, title: str) -> dict:
+        return self.update_conversation(cid, title=title)
 
     def delete_conversation(self, cid: int) -> None:
         """Deletes the chat and its turns, so they also leave the request log and stats."""
         with connect() as conn:
             if conn.execute("DELETE FROM conversations WHERE id = ?", (cid,)).rowcount == 0:
                 raise NotFound(f"chat {cid} not found")
+        if self.index is not None:
+            self.index.delete_conversation(cid)
 
     # Export --------------------------------------------------------------------
 
@@ -274,6 +339,13 @@ class Service:
     def _decorate(self, r: dict) -> dict:
         r["model_label"] = self.cfg.label(r.get("model_key"))
         r["routed_label"] = self.cfg.label(r.get("routed_model"))
+        for col, key in (("neighbors", "neighbors"), ("memory_ids", "memory")):
+            if col in r:
+                raw = r.pop(col)
+                try:
+                    r[key] = json.loads(raw) if raw else []
+                except ValueError:
+                    r[key] = []
         return r
 
     def list_requests(self, limit: int = 50, offset: int = 0, task_id: int | None = None,
@@ -419,7 +491,14 @@ class Service:
             },
             "sync": dict(claude_logs.last_sync),
             "models": models,
+            "index": self.index.status() if self.index is not None else {"enabled": False},
         }
+
+    def rebuild_index(self) -> dict:
+        if self.index is None:
+            raise ValueError("the vector index is turned off in config.yaml (index.enabled)")
+        self.index.rebuild()
+        return self.index.status()
 
     def config_view(self) -> dict:
         from .config import EFFORTS
@@ -429,4 +508,6 @@ class Service:
             "routing": self.cfg.routing.model_dump(),
             "pricing": self.cfg.pricing.model_dump(),
             "efforts": list(EFFORTS),
+            "index": self.cfg.index.model_dump(exclude={"qdrant": {"api_key"}}),
+            "memory": self.cfg.chat.memory.model_dump(),
         }

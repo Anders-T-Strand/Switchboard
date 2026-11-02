@@ -127,6 +127,9 @@ class RoutePlan:
     # What the chosen model will actually run with.
     effort: str | None = None
     think: bool | None = None
+    # Similar past prompts from the vector index, best first, and what the router did with their ratings.
+    neighbors: list[dict] = field(default_factory=list)
+    learned: dict | None = None
 
     def to_dict(self, cfg: Config) -> dict:
         d = asdict(self)
@@ -220,10 +223,11 @@ def parse_classifier_json(text: str) -> tuple[str, int, int, str]:
 
 
 class Router:
-    def __init__(self, cfg: Config, ollama: OllamaClient, claude: ClaudeCLI):
+    def __init__(self, cfg: Config, ollama: OllamaClient, claude: ClaudeCLI, index=None):
         self.cfg = cfg
         self.ollama = ollama
         self.claude = claude
+        self.index = index  # switchboard.index.TurnIndex, or None when the vector index is off
 
     # Which configured local models are in VRAM right now.
     def loaded_local_keys(self) -> list[str]:
@@ -318,6 +322,48 @@ class Router:
             return None
         return effort != "low"
 
+    # Learning from ratings ------------------------------------------------------------
+
+    def apply_learning(self, plan: RoutePlan) -> None:
+        """Move up or down routing.learn.ladder when similar past prompts were rated.
+
+        Up: the current model's answers to similar prompts were mostly rated bad (at least min_votes).
+        Down: a cheaper model has at least min_votes good ratings on similar prompts and no bad ones.
+        """
+        learn = self.cfg.routing.learn
+        if not learn.enabled or plan.chosen not in learn.ladder:
+            return
+        votes = {m: {"good": 0, "bad": 0} for m in learn.ladder}
+        for n in plan.neighbors:
+            if n["score"] >= learn.min_similarity and n["rating"] in (1, -1) and n["model_key"] in votes:
+                votes[n["model_key"]]["good" if n["rating"] == 1 else "bad"] += 1
+
+        def clearly_bad(m: str) -> bool:
+            v = votes[m]
+            return v["bad"] >= learn.min_votes and v["bad"] > v["good"]
+
+        current = plan.chosen
+        i = learn.ladder.index(current)
+        v = votes[current]
+        if clearly_bad(current):
+            for nxt in learn.ladder[i + 1:]:
+                if not clearly_bad(nxt):
+                    plan.chosen = nxt
+                    reason = (f"{v['bad']} of {v['good'] + v['bad']} rated answers from {self.cfg.label(current)} "
+                              "to similar prompts were bad")
+                    plan.learned = {"from": current, "to": nxt, "direction": "up", "reason": reason}
+                    plan.notes.append(f"moved up to {self.cfg.label(nxt)}: {reason}")
+                    return
+        else:
+            for cheaper in learn.ladder[:i]:
+                cv = votes[cheaper]
+                if cv["good"] >= learn.min_votes and cv["bad"] == 0:
+                    plan.chosen = cheaper
+                    reason = f"{cv['good']} answers from {self.cfg.label(cheaper)} to similar prompts were rated good"
+                    plan.learned = {"from": current, "to": cheaper, "direction": "down", "reason": reason}
+                    plan.notes.append(f"moved down to {self.cfg.label(cheaper)}: {reason}")
+                    return
+
     # Planning ------------------------------------------------------------------------
 
     def plan(self, prompt: str, forced_model: str | None = None, forced_effort: str | None = None,
@@ -342,17 +388,23 @@ class Router:
             routed = rule.model if rule else (self.cfg.routing.fallback_order or list(self.cfg.models))[0]
             plan = RoutePlan(mode="auto", chosen=routed, routed=routed,
                              rule=rule.name if rule else None, classification=c, loaded=loaded)
-            target = self.cfg.models[routed]
+
+        if c is not None and self.index is not None and self.cfg.routing.learn.neighbors > 0:
+            plan.neighbors = self.index.neighbors(prompt, self.cfg.routing.learn.neighbors)
+
+        if plan.mode == "auto":
+            self.apply_learning(plan)
+            target = self.cfg.models[plan.chosen]
             if (
                 self.cfg.routing.prefer_loaded_local
                 and target.provider == "ollama"
                 and loaded
-                and routed not in loaded
+                and plan.chosen not in loaded
             ):
-                plan.chosen = loaded[0]
                 plan.notes.append(
-                    f"used {self.cfg.label(loaded[0])} (already loaded) instead of swapping to {self.cfg.label(routed)}"
+                    f"used {self.cfg.label(loaded[0])} (already loaded) instead of swapping to {self.cfg.label(plan.chosen)}"
                 )
+                plan.chosen = loaded[0]
 
         plan.route_effort, plan.effort_source = self.route_effort(
             rule, c, forced_effort if effort_forced else None, plan.notes
@@ -366,17 +418,20 @@ class Router:
     # Running -------------------------------------------------------------------------
 
     def run_model(self, key: str, prompt: str, system_prompt: str | None,
-                  effort: str | None = None, history: list[Turn] | None = None) -> Completion:
+                  effort: str | None = None, history: list[Turn] | None = None,
+                  extra_context: str | None = None) -> Completion:
         """Answer `prompt`. `history` is the earlier conversation, oldest first. Ollama gets it as
-        chat messages, Claude as a transcript in the system prompt (it may span several models)."""
+        chat messages, Claude as a transcript in the system prompt (it may span several models).
+        `extra_context` (memory from other chats) is added to the system prompt for both."""
         m = self.cfg.models[key]
         budget = self.cfg.chat.history_chars.get(m.provider, 32000)
         turns, dropped = trim_history(history or [], budget)
         if m.provider == "ollama":
             think = self.think_for(key, effort)
             messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
+            system = "\n\n".join(part for part in (system_prompt, extra_context) if part)
+            if system:
+                messages.append({"role": "system", "content": system})
             for user, assistant in turns:
                 messages.append({"role": "user", "content": user})
                 messages.append({"role": "assistant", "content": assistant})
@@ -385,6 +440,8 @@ class Router:
             comp.extra["think"] = think
         else:
             sp = system_prompt or self.cfg.claude.system_prompt or ""
+            if extra_context:
+                sp = f"{sp}\n\n{extra_context}".strip()
             if turns:
                 sp = f"{sp}\n\n{CLAUDE_HISTORY_INTRO}\n\n{transcript(turns)}".strip()
             comp = self.claude.complete(m.model, prompt, sp or None, effort)
@@ -394,7 +451,8 @@ class Router:
         return comp
 
     def execute(self, plan: RoutePlan, prompt: str, system_prompt: str | None,
-                history: list[Turn] | None = None) -> tuple[Completion, str, list[str]]:
+                history: list[Turn] | None = None,
+                extra_context: str | None = None) -> tuple[Completion, str, list[str]]:
         """Run the plan. Falls back through routing.fallback_order on failure (auto mode only)."""
         attempts = [plan.chosen]
         if plan.mode == "auto":
@@ -402,7 +460,8 @@ class Router:
         errors: list[str] = []
         for key in attempts:
             try:
-                comp = self.run_model(key, prompt, system_prompt, self.effort_for(key, plan), history)
+                comp = self.run_model(key, prompt, system_prompt, self.effort_for(key, plan), history,
+                                      extra_context)
                 return comp, key, errors
             except ProviderError as e:
                 errors.append(f"{self.cfg.label(key)}: {e}")

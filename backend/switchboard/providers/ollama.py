@@ -71,6 +71,27 @@ class OllamaClient:
             load_ms=int(load_ns / 1_000_000) if load_ns else None,
         )
 
+    def embed(self, model: str, inputs: list[str], *, timeout: float = 60,
+              keep_alive: str | None = None) -> list[list[float]]:
+        """Embeddings for a batch of texts (POST /api/embed)."""
+        payload = {"model": model, "input": inputs, "truncate": True,
+                   "keep_alive": keep_alive or self.cfg.keep_alive}
+        try:
+            with self._client(timeout) as client:
+                r = client.post("/api/embed", json=payload)
+        except httpx.TimeoutException as e:
+            raise ProviderError(f"Ollama embedding timed out after {timeout:.0f}s") from e
+        except httpx.HTTPError as e:
+            raise ProviderError(f"Ollama unreachable at {self.cfg.base_url}: {e}") from e
+        if r.status_code == 404:
+            raise ProviderError(f"embedding model {model} isn't pulled. Run: ollama pull {model}")
+        if r.status_code != 200:
+            raise ProviderError(f"Ollama embed returned HTTP {r.status_code}: {r.text[:200]}")
+        vectors = r.json().get("embeddings") or []
+        if len(vectors) != len(inputs):
+            raise ProviderError(f"Ollama returned {len(vectors)} embeddings for {len(inputs)} inputs")
+        return vectors
+
     def _post_chat(self, payload: dict, timeout: float) -> httpx.Response:
         try:
             with self._client(timeout) as client:

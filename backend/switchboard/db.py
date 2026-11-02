@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS conversations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
+  memory INTEGER NOT NULL DEFAULT 0,  -- add excerpts from other chats to each message
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -34,6 +35,9 @@ CREATE TABLE IF NOT EXISTS requests (
   turn INTEGER,                      -- position in the conversation, from 1
   context_turns INTEGER,             -- earlier turns sent along with this prompt
   rating INTEGER,                    -- 1 good, -1 bad, NULL not rated
+  indexed_model TEXT,                -- embedding model this turn was indexed with in Qdrant
+  neighbors TEXT,                    -- JSON: similar past prompts the router looked at
+  memory_ids TEXT,                   -- JSON: turns from other chats added as memory
   prompt TEXT NOT NULL,
   system_prompt TEXT,
   response TEXT,
@@ -104,6 +108,12 @@ ADDED_COLUMNS = {
         ("turn", "INTEGER"),
         ("context_turns", "INTEGER"),
         ("rating", "INTEGER"),
+        ("indexed_model", "TEXT"),
+        ("neighbors", "TEXT"),
+        ("memory_ids", "TEXT"),
+    ],
+    "conversations": [
+        ("memory", "INTEGER NOT NULL DEFAULT 0"),
     ],
 }
 

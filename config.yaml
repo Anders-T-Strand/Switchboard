@@ -66,6 +66,16 @@ routing:
   # Tried in order when the routed model fails (Ollama down, claude not logged in, usage limit hit...).
   fallback_order: [claude-sonnet, qwen-moe]
 
+  # Learning from your ratings. Each new prompt is compared with past prompts in the vector index.
+  # If answers from the routed model to similar prompts were mostly rated bad, it moves up the ladder.
+  # If a cheaper model's answers to similar prompts were rated good (and none bad), it moves down.
+  learn:
+    enabled: true
+    ladder: [qwen-moe, claude-sonnet, claude-opus]   # cheapest first
+    neighbors: 8          # similar past prompts looked up per message
+    min_similarity: 0.80  # how close a past prompt must be to count
+    min_votes: 3          # ratings needed before the router moves
+
   # Complexity picks the model. Reasoning picks how hard it thinks.
   # Claude gets the effort level (overrides your own /effort setting, for that call only).
   # Local models get thinking off at low and on at anything higher.
@@ -110,6 +120,26 @@ chat:
     ollama: 24000        # about 7K tokens, keep well under num_ctx so the answer still fits
     claude_cli: 150000
   classifier_context_chars: 800   # how much of the previous exchange the classifier sees
+  # Memory, turned on per chat in the Console: related turns from other chats go along with each message.
+  memory:
+    max_items: 4
+    min_score: 0.55     # how related a past turn must be (cosine similarity)
+    max_chars: 6000
+
+# Vector index in Qdrant. Every answered turn is embedded through Ollama and stored here.
+# Used for chat search by meaning, the learning router above, and memory.
+index:
+  enabled: true
+  qdrant:
+    url: http://127.0.0.1:6333   # Qdrant server (Docker or the Windows build, see README)
+    # path: data/qdrant          # or embedded mode: no server, stored in this folder (remove url)
+    collection: switchboard_turns
+  embedding:
+    model: qwen3-embedding:0.6b  # run: ollama pull qwen3-embedding:0.6b
+    max_chars: 8000              # prompt plus answer text embedded per turn
+    instructions: true           # Qwen3-Embedding query instructions. Set false for other models.
+  interval_s: 30                 # how often to retry when Qdrant or the embedding model is unavailable
+  search_min_score: 0.45         # chat search by meaning ignores weaker matches
 
 # USD per million tokens (Claude API list prices, Oct 2026). Used for API-equivalent cost
 # estimates only. Your Pro plan isn't billed per token, so treat these as "what this would

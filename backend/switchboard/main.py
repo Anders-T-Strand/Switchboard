@@ -28,6 +28,7 @@ class PromptIn(BaseModel):
     task_id: int | None = None
     system_prompt: str | None = None
     conversation_id: int | None = None  # continue this chat. Leave out to start a new one.
+    memory: bool | None = None  # turn memory from other chats on or off for this chat
 
 
 class PreviewIn(BaseModel):
@@ -37,8 +38,9 @@ class PreviewIn(BaseModel):
     conversation_id: int | None = None
 
 
-class RenameIn(BaseModel):
-    title: str = Field(min_length=1, max_length=200)
+class ConversationPatch(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    memory: bool | None = None
 
 
 class RatingIn(BaseModel):
@@ -66,6 +68,17 @@ def _sync_loop(cfg: Config, stop: threading.Event) -> None:
         stop.wait(max(cfg.claude.sync_interval_s, 5))
 
 
+def _index_loop(index, interval: int, stop: threading.Event) -> None:
+    """Index new turns as they're saved, and catch up after Qdrant or Ollama was unavailable."""
+    while not stop.is_set():
+        try:
+            index.index_all()
+        except Exception:
+            log.exception("vector indexing failed")
+        index.wake.wait(max(interval, 5))
+        index.wake.clear()
+
+
 def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> FastAPI:
     cfg = cfg or get_config()
     init_db(cfg.db_path)
@@ -74,14 +87,20 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         stop = threading.Event()
-        thread = None
+        threads = []
         if background_sync:
-            thread = threading.Thread(target=_sync_loop, args=(cfg, stop), daemon=True, name="cc-sync")
-            thread.start()
+            threads.append(threading.Thread(target=_sync_loop, args=(cfg, stop), daemon=True, name="cc-sync"))
+            if svc.index is not None:
+                threads.append(threading.Thread(target=_index_loop, args=(svc.index, cfg.index.interval_s, stop),
+                                                daemon=True, name="indexer"))
+            for t in threads:
+                t.start()
         yield
         stop.set()
-        if thread:
-            thread.join(timeout=5)
+        if svc.index is not None:
+            svc.index.wake.set()
+        for t in threads:
+            t.join(timeout=5)
 
     app = FastAPI(title="Switchboard", version="0.1.0", lifespan=lifespan)
     app.state.service = svc
@@ -95,7 +114,7 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
     def run_prompt(body: PromptIn):
         try:
             return svc.run_prompt(body.prompt, body.model, body.task_id, body.system_prompt,
-                                  body.effort, body.conversation_id)
+                                  body.effort, body.conversation_id, body.memory)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except NotFound as e:
@@ -128,9 +147,9 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
             not_found(e)
 
     @app.patch("/api/conversations/{cid}")
-    def rename_conversation(cid: int, body: RenameIn):
+    def update_conversation(cid: int, body: ConversationPatch):
         try:
-            return svc.rename_conversation(cid, body.title)
+            return svc.update_conversation(cid, body.title, body.memory)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except NotFound as e:
@@ -151,6 +170,13 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
             raise HTTPException(status_code=400, detail=str(e))
         except NotFound as e:
             not_found(e)
+
+    @app.post("/api/index/rebuild")
+    def rebuild_index():
+        try:
+            return svc.rebuild_index()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     @app.get("/api/export.jsonl")
     def export(format: str = "conversations"):

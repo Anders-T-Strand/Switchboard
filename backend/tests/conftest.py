@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import stat
+import zlib
 import sys
 import textwrap
 from pathlib import Path
@@ -35,7 +37,7 @@ FAKE_CLAUDE = textwrap.dedent(
         sys.exit(1)
     print(json.dumps({
         "type": "result", "subtype": "success", "is_error": False,
-        "result": f"claude[{model}] answer. key_present={'ANTHROPIC_API_KEY' in os.environ} system_prompt={bool(sp)} effort={os.environ.get('CLAUDE_CODE_EFFORT_LEVEL')} history={sp.count('<turn role="user">')} prompt={prompt!r}",
+        "result": f"claude[{model}] answer. key_present={'ANTHROPIC_API_KEY' in os.environ} system_prompt={bool(sp)} effort={os.environ.get('CLAUDE_CODE_EFFORT_LEVEL')} history={sp.count('<turn role="user">')} memory={sp.count('<excerpt ')} prompt={prompt!r}",
         "session_id": "s1", "num_turns": 1, "total_cost_usd": 0.0123,
         "usage": {"input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 50},
         "modelUsage": {
@@ -47,6 +49,22 @@ FAKE_CLAUDE = textwrap.dedent(
 )
 
 
+STOPWORDS = {"the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "is", "it", "my", "how", "do",
+             "i", "what", "with", "this", "that", "be", "can", "you"}
+
+
+def fake_embedding(text: str, dim: int = 64) -> list[float]:
+    """Bag-of-words vector: texts that share words point the same way. Instructions are dropped."""
+    if text.startswith("Instruct:") and "\nQuery: " in text:
+        text = text.split("\nQuery: ", 1)[1]
+    v = [0.0] * dim
+    for w in re.findall(r"[a-z0-9]+", text.lower()):
+        if w not in STOPWORDS:
+            v[zlib.crc32(w.encode()) % dim] += 1.0
+    norm = math.sqrt(sum(x * x for x in v)) or 1.0
+    return [x / norm for x in v] if any(v) else [1.0 / math.sqrt(dim)] * dim
+
+
 class FakeOllama:
     """Classifier labels: "C<n> R<n>" in the prompt sets complexity and reasoning directly.
     Otherwise HARD -> code 4/4, EXPERT -> analysis 5/5, anything else -> chat 1/1."""
@@ -55,7 +73,9 @@ class FakeOllama:
         self.loaded = ["qwen3.6:35b-a3b"]
         self.installed = ["qwen3.6:35b-a3b", "qwen3.8:27b"]
         self.down = False
+        self.embed_down = False
         self.chat_calls: list[dict] = []
+        self.embed_calls: list[dict] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if self.down:
@@ -67,6 +87,13 @@ class FakeOllama:
             return httpx.Response(200, json={"models": [{"name": n} for n in self.loaded]})
         if path == "/api/tags":
             return httpx.Response(200, json={"models": [{"name": n} for n in self.installed]})
+        if path == "/api/embed":
+            if self.embed_down:
+                return httpx.Response(404, json={"error": "model not found"})
+            body = json.loads(request.content)
+            self.embed_calls.append(body)
+            return httpx.Response(200, json={"model": body["model"],
+                                             "embeddings": [fake_embedding(t) for t in body["input"]]})
         if path == "/api/chat":
             body = json.loads(request.content)
             self.chat_calls.append(body)
@@ -126,6 +153,7 @@ def cfg(tmp_path, fake_claude, monkeypatch) -> Config:
         "ollama": {"base_url": "http://ollama.test"},
         "claude": {"command": str(fake_claude), "logs_dir": str(tmp_path / "claude-home"),
                    "system_prompt": "be brief"},
+        "chat": {"memory": {"min_score": 0.3}},
         "models": {
             "qwen-moe": {"provider": "ollama", "model": "qwen3.6:35b-a3b", "label": "Qwen MoE"},
             "qwen-dense": {"provider": "ollama", "model": "qwen3.8:27b", "label": "Qwen Dense"},
@@ -136,6 +164,7 @@ def cfg(tmp_path, fake_claude, monkeypatch) -> Config:
             "classifier": {"model": "qwen-moe"},
             "prefer_loaded_local": True,
             "fallback_order": ["claude-sonnet", "qwen-moe"],
+            "learn": {"ladder": ["qwen-moe", "claude-sonnet", "claude-opus"], "min_similarity": 0.8, "min_votes": 2},
             "rules": [
                 {"name": "expert", "min_complexity": 5, "model": "claude-opus"},
                 {"name": "hard", "min_complexity": 4, "model": "claude-sonnet"},
@@ -143,6 +172,7 @@ def cfg(tmp_path, fake_claude, monkeypatch) -> Config:
                 {"name": "default", "model": "qwen-moe"},
             ],
         },
+        "index": {"qdrant": {"url": ":memory:"}, "embedding": {"model": "fake-embed"}, "batch_size": 4},
         "pricing": {
             "reference_model": "sonnet",
             "models": {
