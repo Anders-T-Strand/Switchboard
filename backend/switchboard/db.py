@@ -18,10 +18,22 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS conversations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at);
+
 CREATE TABLE IF NOT EXISTS requests (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   created_at TEXT NOT NULL,
   task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  conversation_id INTEGER REFERENCES conversations(id) ON DELETE CASCADE,
+  turn INTEGER,                      -- position in the conversation, from 1
+  context_turns INTEGER,             -- earlier turns sent along with this prompt
+  rating INTEGER,                    -- 1 good, -1 bad, NULL not rated
   prompt TEXT NOT NULL,
   system_prompt TEXT,
   response TEXT,
@@ -56,6 +68,7 @@ CREATE TABLE IF NOT EXISTS requests (
 );
 CREATE INDEX IF NOT EXISTS idx_requests_created ON requests(created_at);
 CREATE INDEX IF NOT EXISTS idx_requests_task ON requests(task_id);
+CREATE INDEX IF NOT EXISTS idx_requests_conversation ON requests(conversation_id, turn);
 
 CREATE TABLE IF NOT EXISTS cc_usage (
   uid TEXT PRIMARY KEY,
@@ -87,8 +100,21 @@ ADDED_COLUMNS = {
         ("effort", "TEXT"),
         ("effort_source", "TEXT"),
         ("think", "INTEGER"),
+        ("conversation_id", "INTEGER REFERENCES conversations(id) ON DELETE CASCADE"),
+        ("turn", "INTEGER"),
+        ("context_turns", "INTEGER"),
+        ("rating", "INTEGER"),
     ],
 }
+
+
+def make_title(prompt: str, limit: int = 70) -> str:
+    """A conversation title from its first prompt: first line, cut at a word boundary."""
+    line = " ".join(prompt.strip().split())
+    if len(line) <= limit:
+        return line or "New chat"
+    cut = line[:limit].rsplit(" ", 1)[0]
+    return (cut if len(cut) > limit // 2 else line[:limit]).rstrip(",.:;-") + "…"
 
 _db_path: Path | None = None
 
@@ -110,6 +136,21 @@ def init_db(path: Path) -> None:
                     if name not in existing:
                         conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
         conn.executescript(SCHEMA)
+        _adopt_loose_requests(conn)
+
+
+def _adopt_loose_requests(conn: sqlite3.Connection) -> None:
+    """Requests from before conversations existed each become a one-turn conversation,
+    so they show up in the chat list and can be continued."""
+    loose = conn.execute(
+        "SELECT id, created_at, prompt FROM requests WHERE conversation_id IS NULL ORDER BY id"
+    ).fetchall()
+    for r in loose:
+        cur = conn.execute(
+            "INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?)",
+            (make_title(r["prompt"]), r["created_at"], r["created_at"]),
+        )
+        conn.execute("UPDATE requests SET conversation_id = ?, turn = 1 WHERE id = ?", (cur.lastrowid, r["id"]))
 
 
 @contextmanager

@@ -128,6 +128,15 @@ class PricingCfg(BaseModel):
     models: dict[str, PriceCfg] = Field(default_factory=dict)
 
 
+class ChatCfg(BaseModel):
+    # Characters of earlier conversation sent with each new message, per provider. The oldest
+    # turns are left out first. Keep the Ollama budget well under the num_ctx you give local models
+    # (roughly 3.5 characters per token).
+    history_chars: dict[str, int] = Field(default_factory=lambda: {"ollama": 32000, "claude_cli": 150000})
+    # How much of the previous exchange the classifier sees when rating a follow-up.
+    classifier_context_chars: int = 800
+
+
 class Config(BaseModel):
     server: ServerCfg = Field(default_factory=ServerCfg)
     ollama: OllamaCfg = Field(default_factory=OllamaCfg)
@@ -135,6 +144,7 @@ class Config(BaseModel):
     models: dict[str, ModelCfg]
     routing: RoutingCfg
     pricing: PricingCfg = Field(default_factory=PricingCfg)
+    chat: ChatCfg = Field(default_factory=ChatCfg)
 
     @model_validator(mode="after")
     def _check_references(self) -> "Config":

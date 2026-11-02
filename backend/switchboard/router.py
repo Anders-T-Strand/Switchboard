@@ -39,6 +39,7 @@ reasoning (1 to 5) is how much step-by-step thinking the answer needs before it 
 4 a lot: multi-step derivation, tracing code paths, weighing several options against each other
 5 extensive: long proofs or calculations, many cases to check, subtle bugs
 
+If earlier conversation is shown, rate the new prompt in that context. A short follow-up such as "why?" or "make it shorter" is as hard as the work it refers to.
 Rate complexity and reasoning separately. A polished speech in a famous writer's style can be complexity 5 and reasoning 1. Finding an off-by-one error in a short loop can be complexity 2 and reasoning 4.
 Judge by how hard the prompt is to answer well, not by how long it is.
 Reply with JSON only: {"task_type": ..., "complexity": ..., "reasoning": ..., "reason": "<one short sentence>"}"""
@@ -53,6 +54,50 @@ CLASSIFIER_SCHEMA = {
     },
     "required": ["task_type", "complexity", "reasoning", "reason"],
 }
+
+
+Turn = tuple[str, str]  # (user message, assistant reply)
+
+CLAUDE_HISTORY_INTRO = (
+    "This is an ongoing conversation. Earlier turns are below, oldest first. Some earlier replies "
+    "may have come from other models. The user's newest message follows separately. Answer it as "
+    "the next turn of this conversation."
+)
+
+
+def clip(text: str, n: int) -> str:
+    text = text.strip()
+    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
+
+
+def trim_history(history: list[Turn], budget: int) -> tuple[list[Turn], int]:
+    """Keep the newest turns that fit in `budget` characters. Returns (kept, dropped count).
+    The latest turn is always kept, shortened from the front if it alone is too long."""
+    kept: list[Turn] = []
+    total = 0
+    for user, assistant in reversed(history):
+        size = len(user) + len(assistant)
+        if not kept and size > budget:
+            user = clip(user, max(budget // 4, 200))
+            room = max(budget - len(user), 200)
+            assistant = "…" + assistant[-room:] if len(assistant) > room else assistant
+            kept.append((user, assistant))
+            break
+        if kept and total + size > budget:
+            break
+        kept.append((user, assistant))
+        total += size
+    kept.reverse()
+    return kept, len(history) - len(kept)
+
+
+def transcript(turns: list[Turn]) -> str:
+    parts = ["<conversation>"]
+    for user, assistant in turns:
+        parts.append(f'<turn role="user">\n{user}\n</turn>')
+        parts.append(f'<turn role="assistant">\n{assistant}\n</turn>')
+    parts.append("</conversation>")
+    return "\n".join(parts)
 
 
 @dataclass
@@ -195,31 +240,40 @@ class Router:
                 return rule
         return None
 
-    def classify(self, prompt: str, loaded_keys: list[str]) -> Classification:
+    def classify(self, prompt: str, loaded_keys: list[str], context: Turn | None = None) -> Classification:
         ccfg = self.cfg.routing.classifier
         key = ccfg.model
         if ccfg.use_loaded_model and loaded_keys:
             key = loaded_keys[0]
         model = self.cfg.models[key]
         snippet = prompt[: ccfg.max_prompt_chars]
+        lead = ""
+        if context:
+            n = self.cfg.chat.classifier_context_chars
+            lead = (
+                "Earlier in the conversation, for context only:\n"
+                f"User: {clip(context[0], n)}\nAssistant: {clip(context[1], n)}\n\n"
+            )
         t0 = time.perf_counter()
         try:
             comp = self.ollama.chat(
                 model.model,
                 [
                     {"role": "system", "content": CLASSIFIER_SYSTEM},
-                    {"role": "user", "content": f"Prompt to classify:\n<<<\n{snippet}\n>>>"},
+                    {"role": "user", "content": f"{lead}Prompt to classify:\n<<<\n{snippet}\n>>>"},
                 ],
                 think=ccfg.think,
                 fmt=CLASSIFIER_SCHEMA,
-                options={"temperature": 0},
+                # Same options as answering (num_ctx in particular), or Ollama reloads the model.
+                options={**(model.options or {}), "temperature": 0},
                 timeout=ccfg.timeout_s,
             )
             task, complexity, reasoning, reason = parse_classifier_json(comp.text)
             return Classification(task, complexity, reasoning, reason, "model", key,
                                   int((time.perf_counter() - t0) * 1000))
         except (ProviderError, ValueError) as e:
-            c = heuristic_classify(prompt)
+            # A short follow-up says little on its own, so rate it together with what it follows.
+            c = heuristic_classify(f"{context[0]}\n{prompt}" if context and len(prompt) < 200 else prompt)
             c.reason = f"{c.reason} (classifier unavailable: {str(e)[:120]})"
             c.ms = int((time.perf_counter() - t0) * 1000)
             return c
@@ -266,7 +320,8 @@ class Router:
 
     # Planning ------------------------------------------------------------------------
 
-    def plan(self, prompt: str, forced_model: str | None = None, forced_effort: str | None = None) -> RoutePlan:
+    def plan(self, prompt: str, forced_model: str | None = None, forced_effort: str | None = None,
+             context: Turn | None = None) -> RoutePlan:
         model_forced = bool(forced_model) and forced_model != "auto"
         effort_forced = bool(forced_effort) and forced_effort != "auto"
         if model_forced and forced_model not in self.cfg.models:
@@ -276,7 +331,7 @@ class Router:
 
         loaded = self.loaded_local_keys()
         # The classifier still runs when only the model is forced, because it decides the effort.
-        c = None if (model_forced and effort_forced) else self.classify(prompt, loaded)
+        c = None if (model_forced and effort_forced) else self.classify(prompt, loaded, context)
 
         rule = None
         if model_forced:
@@ -311,22 +366,35 @@ class Router:
     # Running -------------------------------------------------------------------------
 
     def run_model(self, key: str, prompt: str, system_prompt: str | None,
-                  effort: str | None = None) -> Completion:
+                  effort: str | None = None, history: list[Turn] | None = None) -> Completion:
+        """Answer `prompt`. `history` is the earlier conversation, oldest first. Ollama gets it as
+        chat messages, Claude as a transcript in the system prompt (it may span several models)."""
         m = self.cfg.models[key]
+        budget = self.cfg.chat.history_chars.get(m.provider, 32000)
+        turns, dropped = trim_history(history or [], budget)
         if m.provider == "ollama":
             think = self.think_for(key, effort)
             messages = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
+            for user, assistant in turns:
+                messages.append({"role": "user", "content": user})
+                messages.append({"role": "assistant", "content": assistant})
             messages.append({"role": "user", "content": prompt})
             comp = self.ollama.chat(m.model, messages, think=think, options=m.options or None)
             comp.extra["think"] = think
         else:
-            comp = self.claude.complete(m.model, prompt, system_prompt, effort)
+            sp = system_prompt or self.cfg.claude.system_prompt or ""
+            if turns:
+                sp = f"{sp}\n\n{CLAUDE_HISTORY_INTRO}\n\n{transcript(turns)}".strip()
+            comp = self.claude.complete(m.model, prompt, sp or None, effort)
         comp.extra["effort"] = effort
+        comp.extra["context_turns"] = len(turns)
+        comp.extra["context_dropped"] = dropped
         return comp
 
-    def execute(self, plan: RoutePlan, prompt: str, system_prompt: str | None) -> tuple[Completion, str, list[str]]:
+    def execute(self, plan: RoutePlan, prompt: str, system_prompt: str | None,
+                history: list[Turn] | None = None) -> tuple[Completion, str, list[str]]:
         """Run the plan. Falls back through routing.fallback_order on failure (auto mode only)."""
         attempts = [plan.chosen]
         if plan.mode == "auto":
@@ -334,7 +402,8 @@ class Router:
         errors: list[str] = []
         for key in attempts:
             try:
-                return self.run_model(key, prompt, system_prompt, self.effort_for(key, plan)), key, errors
+                comp = self.run_model(key, prompt, system_prompt, self.effort_for(key, plan), history)
+                return comp, key, errors
             except ProviderError as e:
                 errors.append(f"{self.cfg.label(key)}: {e}")
         raise ProviderError(" | ".join(errors))
