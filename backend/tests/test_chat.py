@@ -165,7 +165,11 @@ def test_old_requests_become_chats(tmp_path):
     old = sqlite3.connect(path)
     old.executescript("\n".join(lines))
     for p in ("first old prompt", "second old prompt"):
-        old.execute("INSERT INTO requests (created_at, prompt, status, route_mode) VALUES ('2026-10-30T10:00:00+00:00', ?, 'ok', 'auto')", (p,))
+        old.execute(
+            "INSERT INTO requests (created_at, prompt, status, route_mode) "
+            "VALUES ('2026-10-30T10:00:00+00:00', ?, 'ok', 'auto')",
+            (p,),
+        )
     old.commit()
     old.close()
 
@@ -175,7 +179,8 @@ def test_old_requests_become_chats(tmp_path):
         convs = conn.execute("SELECT id, title, created_at FROM conversations ORDER BY id").fetchall()
         assert [c["title"] for c in convs] == ["first old prompt", "second old prompt"]
         assert convs[0]["created_at"] == "2026-10-30T10:00:00+00:00"
-        assert conn.execute("SELECT COUNT(*) FROM requests WHERE conversation_id IS NULL OR turn != 1").fetchone()[0] == 0
+        loose = conn.execute("SELECT COUNT(*) FROM requests WHERE conversation_id IS NULL OR turn != 1")
+        assert loose.fetchone()[0] == 0
         # Deleting a migrated chat still cascades to its request.
         conn.execute("DELETE FROM conversations WHERE id = ?", (convs[0]["id"],))
         assert conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import Config
@@ -46,8 +46,8 @@ def to_utc_iso(ts: str | None) -> str | None:
     except ValueError:
         return None
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).isoformat(timespec="milliseconds")
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).isoformat(timespec="milliseconds")
 
 
 def parse_entry(obj: dict, router_dir: str) -> dict | None:

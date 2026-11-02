@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Iterator
+from collections.abc import Iterator
 
 from .config import Config
 from .db import connect, make_title, now_iso, rows

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time, timedelta
 
 from .config import Config
 from .db import connect, rows
@@ -13,7 +13,7 @@ def window_start(days: int) -> datetime:
     """Local midnight `days - 1` days ago, so days=7 means today plus the six before it."""
     today = datetime.now().astimezone().date()
     start_local = datetime.combine(today - timedelta(days=max(days, 1) - 1), time.min).astimezone()
-    return start_local.astimezone(timezone.utc)
+    return start_local.astimezone(UTC)
 
 
 def local_day(ts_iso: str) -> str:
@@ -41,7 +41,8 @@ def summary(cfg: Config, days: int) -> dict:
     since = _since(days)
     with connect() as conn:
         reqs = rows(conn.execute(
-            """SELECT model_key, provider, status, fell_back, task_type, complexity, reasoning, route_mode, effort, think, rating,
+            """SELECT model_key, provider, status, fell_back, task_type, complexity, reasoning, route_mode,
+                      effort, think, rating,
                       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                       latency_ms, cost_usd, avoided_usd
                FROM requests WHERE created_at >= ?""",
@@ -104,7 +105,8 @@ def summary(cfg: Config, days: int) -> dict:
             reasoning[r["reasoning"] - 1] += 1
         if r["route_mode"] != "auto":
             continue
-        t = task_types.setdefault(r["task_type"] or "other", {"task_type": r["task_type"] or "other", "total": 0, "models": defaultdict(int)})
+        task = r["task_type"] or "other"
+        t = task_types.setdefault(task, {"task_type": task, "total": 0, "models": defaultdict(int)})
         t["total"] += 1
         t["models"][r["model_key"]] += 1
         if r["complexity"]:

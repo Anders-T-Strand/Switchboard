@@ -13,13 +13,14 @@ missing or resized collection is rebuilt from SQLite.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .config import Config
 from .db import connect, rows
-from .providers import OllamaClient, ProviderError
+from .providers import OllamaClient
 
 log = logging.getLogger("switchboard.index")
 
@@ -77,7 +78,7 @@ class TurnIndex:
         return f"embedded at {self.cfg.qdrant_path}" if q.path else (q.url or "")
 
     def _ok(self) -> None:
-        self.state.update(ok=True, reason=None, checked_at=datetime.now(timezone.utc).isoformat())
+        self.state.update(ok=True, reason=None, checked_at=datetime.now(UTC).isoformat())
 
     def _fail(self, e: Exception) -> None:
         reason = str(e) or e.__class__.__name__
@@ -85,7 +86,7 @@ class TurnIndex:
             reason = f"Qdrant isn't reachable at {self.where()}. Is it running?"
         if self.state["reason"] != reason:
             log.warning("vector index unavailable: %s", reason)
-        self.state.update(ok=False, reason=reason[:300], checked_at=datetime.now(timezone.utc).isoformat())
+        self.state.update(ok=False, reason=reason[:300], checked_at=datetime.now(UTC).isoformat())
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         e = self.icfg.embedding
@@ -125,10 +126,8 @@ class TurnIndex:
         if not (q.path or q.url == ":memory:"):  # payload indexes only exist on a Qdrant server
             for field, schema in (("conversation_id", models.PayloadSchemaType.INTEGER),
                                   ("model_key", models.PayloadSchemaType.KEYWORD)):
-                try:
+                with contextlib.suppress(Exception):
                     c.create_payload_index(self.collection, field_name=field, field_schema=schema)
-                except Exception:
-                    pass
         self._reset_sqlite()  # the collection was empty, so everything needs indexing again
         self.state["dim"] = dim
         return dim
@@ -181,7 +180,7 @@ class TurnIndex:
                                      [(self.model, b["id"]) for b in batch])
                 self._ok()
                 return len(batch)
-            except (ProviderError, Exception) as e:  # noqa: B014 - any failure just pauses indexing
+            except Exception as e:  # any failure (Ollama, Qdrant, SQLite) just pauses indexing
                 self._fail(e)
                 return 0
 

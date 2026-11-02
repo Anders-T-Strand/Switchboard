@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import re
 import stat
-import zlib
 import sys
 import textwrap
+import zlib
 from pathlib import Path
 
 import httpx
@@ -35,11 +34,18 @@ FAKE_CLAUDE = textwrap.dedent(
     if "FAIL" in prompt:
         print(json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "boom"}))
         sys.exit(1)
+    # Report what reached the CLI. (Plain variables keep this valid on Python 3.11.)
+    key_present = "ANTHROPIC_API_KEY" in os.environ
+    effort = os.environ.get("CLAUDE_CODE_EFFORT_LEVEL")
+    history = sp.count('<turn role="user">')
+    memory = sp.count("<excerpt ")
     print(json.dumps({
         "type": "result", "subtype": "success", "is_error": False,
-        "result": f"claude[{model}] answer. key_present={'ANTHROPIC_API_KEY' in os.environ} system_prompt={bool(sp)} effort={os.environ.get('CLAUDE_CODE_EFFORT_LEVEL')} history={sp.count('<turn role="user">')} memory={sp.count('<excerpt ')} prompt={prompt!r}",
+        "result": (f"claude[{model}] answer. key_present={key_present} system_prompt={bool(sp)} "
+                   f"effort={effort} history={history} memory={memory} prompt={prompt!r}"),
         "session_id": "s1", "num_turns": 1, "total_cost_usd": 0.0123,
-        "usage": {"input_tokens": 10, "output_tokens": 20, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 50},
+        "usage": {"input_tokens": 10, "output_tokens": 20,
+                  "cache_read_input_tokens": 100, "cache_creation_input_tokens": 50},
         "modelUsage": {
             "claude-haiku-5-5": {"inputTokens": 5, "outputTokens": 2, "costUSD": 0.0001},
             "claude-sonnet-5-5": {"inputTokens": 10, "outputTokens": 20, "costUSD": 0.0122},

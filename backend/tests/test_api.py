@@ -1,4 +1,5 @@
 import json
+from datetime import UTC
 
 import pytest
 from fastapi.testclient import TestClient
@@ -87,9 +88,9 @@ def test_stats(client, cfg):
 
     proj = cfg.claude_logs_root / "projects" / "p"
     proj.mkdir(parents=True)
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     (proj / "s.jsonl").write_text(json.dumps({
         "type": "assistant", "timestamp": now, "sessionId": "s9", "cwd": "/x", "requestId": "r",
         "message": {"id": "m", "model": "claude-opus-5-5", "usage": {"input_tokens": 1000, "output_tokens": 1000}},
@@ -157,9 +158,7 @@ def test_preview_with_effort(client):
 def test_old_database_is_migrated(tmp_path):
     import sqlite3
 
-    from switchboard.db import connect, init_db
-
-    from switchboard.db import SCHEMA
+    from switchboard.db import SCHEMA, connect, init_db
 
     # The first release's schema: today's minus the columns added since.
     added = ("reasoning INTEGER", "effort TEXT", "effort_source TEXT", "think INTEGER")

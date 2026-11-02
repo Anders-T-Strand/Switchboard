@@ -84,9 +84,7 @@ class RuleCfg(BaseModel):
             return False
         if self.min_reasoning is not None and reasoning < self.min_reasoning:
             return False
-        if self.max_reasoning is not None and reasoning > self.max_reasoning:
-            return False
-        return True
+        return not (self.max_reasoning is not None and reasoning > self.max_reasoning)
 
 
 def _default_effort_map() -> dict[int, str]:
@@ -193,7 +191,7 @@ class Config(BaseModel):
     index: IndexCfg = Field(default_factory=IndexCfg)
 
     @model_validator(mode="after")
-    def _check_references(self) -> "Config":
+    def _check_references(self) -> Config:
         known = set(self.models)
         problems = []
         for rule in self.routing.rules:

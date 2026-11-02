@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import threading
 from contextlib import asynccontextmanager
-
 from datetime import date
 
 from fastapi import FastAPI, HTTPException, Query
@@ -116,7 +115,7 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
             return svc.run_prompt(body.prompt, body.model, body.task_id, body.system_prompt,
                                   body.effort, body.conversation_id, body.memory)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except NotFound as e:
             not_found(e)
 
@@ -125,7 +124,7 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
         try:
             return svc.preview(body.prompt, body.model, body.effort, body.conversation_id)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except NotFound as e:
             not_found(e)
 
@@ -151,7 +150,7 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
         try:
             return svc.update_conversation(cid, body.title, body.memory)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except NotFound as e:
             not_found(e)
 
@@ -167,7 +166,7 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
         try:
             return svc.rate(rec_id, body.rating)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except NotFound as e:
             not_found(e)
 
@@ -176,7 +175,7 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
         try:
             return svc.rebuild_index()
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     @app.get("/api/export.jsonl")
     def export(format: str = "conversations"):
@@ -219,14 +218,14 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
         try:
             return svc.create_task(body.title, body.notes, body.status)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     @app.patch("/api/tasks/{task_id}")
     def update_task(task_id: int, body: TaskPatch):
         try:
             return svc.update_task(task_id, **body.model_dump())
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except NotFound as e:
             not_found(e)
 

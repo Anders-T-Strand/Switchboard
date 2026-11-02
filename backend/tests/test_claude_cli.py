@@ -34,7 +34,8 @@ def test_main_model_and_usage():
     comp = completion_from_result({
         "type": "result", "subtype": "success", "result": " answer ",
         "total_cost_usd": 0.5,
-        "usage": {"input_tokens": 3, "output_tokens": 4, "cache_read_input_tokens": 5, "cache_creation_input_tokens": 6},
+        "usage": {"input_tokens": 3, "output_tokens": 4,
+                  "cache_read_input_tokens": 5, "cache_creation_input_tokens": 6},
         "modelUsage": {"claude-haiku-5-5": {"outputTokens": 1}, "claude-opus-5-5": {"outputTokens": 99}},
     }, "opus", 1234)
     assert comp.text == "answer"

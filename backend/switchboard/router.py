@@ -25,7 +25,8 @@ task_type is one of:
 - planning: plans, strategies, step-by-step designs
 - other: anything else
 
-complexity (1 to 5) is how capable the model has to be: depth of knowledge, nuance, judgment, and how high the quality bar is.
+complexity (1 to 5) is how capable the model has to be: depth of knowledge, nuance, judgment,
+and how high the quality bar is.
 1 trivial: greeting, one-line fact, simple rephrase
 2 easy: short explanation, small self-contained snippet, summary of a short text
 3 moderate: multi-part answer, standard coding task, structured writing
@@ -39,8 +40,10 @@ reasoning (1 to 5) is how much step-by-step thinking the answer needs before it 
 4 a lot: multi-step derivation, tracing code paths, weighing several options against each other
 5 extensive: long proofs or calculations, many cases to check, subtle bugs
 
-If earlier conversation is shown, rate the new prompt in that context. A short follow-up such as "why?" or "make it shorter" is as hard as the work it refers to.
-Rate complexity and reasoning separately. A polished speech in a famous writer's style can be complexity 5 and reasoning 1. Finding an off-by-one error in a short loop can be complexity 2 and reasoning 4.
+If earlier conversation is shown, rate the new prompt in that context. A short follow-up such as
+"why?" or "make it shorter" is as hard as the work it refers to.
+Rate complexity and reasoning separately. A polished speech in a famous writer's style can be
+complexity 5 and reasoning 1. Finding an off-by-one error in a short loop can be complexity 2 and reasoning 4.
 Judge by how hard the prompt is to answer well, not by how long it is.
 Reply with JSON only: {"task_type": ..., "complexity": ..., "reasoning": ..., "reason": "<one short sentence>"}"""
 
@@ -402,7 +405,8 @@ class Router:
                 and plan.chosen not in loaded
             ):
                 plan.notes.append(
-                    f"used {self.cfg.label(loaded[0])} (already loaded) instead of swapping to {self.cfg.label(plan.chosen)}"
+                    f"used {self.cfg.label(loaded[0])} (already loaded) "
+                    f"instead of swapping to {self.cfg.label(plan.chosen)}"
                 )
                 plan.chosen = loaded[0]
 

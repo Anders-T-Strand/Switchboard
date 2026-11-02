@@ -4,7 +4,8 @@ from switchboard import claude_logs
 from switchboard.db import connect
 
 
-def entry(mid, rid, model="claude-sonnet-5-5", out=10, cwd="/home/me/proj", ts="2026-10-31T12:00:00.000Z", session="s1"):
+def entry(mid, rid, model="claude-sonnet-5-5", out=10, cwd="/home/me/proj",
+          ts="2026-10-31T12:00:00.000Z", session="s1"):
     return {
         "type": "assistant", "timestamp": ts, "sessionId": session, "cwd": cwd, "requestId": rid,
         "message": {"id": mid, "model": model, "usage": {

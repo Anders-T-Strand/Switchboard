@@ -8,16 +8,15 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 
 
 def _utf8_stdout() -> None:
     for stream in (sys.stdout, sys.stderr):
-        try:
+        with contextlib.suppress(AttributeError, ValueError):
             stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
-            pass
 
 
 def _open_when_ready(url: str) -> None:
