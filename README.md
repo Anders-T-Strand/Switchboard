@@ -140,7 +140,7 @@ claude -p "say hi"
 .\switchboard
 ```
 
-The dashboard opens in your browser at http://127.0.0.1:8787. You can also double-click `switchboard.cmd` in Explorer, or make a shortcut to it and pin that to the taskbar.
+The dashboard opens in your browser at http://127.0.0.1:8787. You can also double-click `switchboard.cmd` in Explorer, or make a shortcut to it and pin that to the taskbar. `switchboard.ico` next to it is the dashboard's logo, for the shortcut's icon (Properties, Change Icon).
 
 After the first run it just starts the server. It rebuilds the dashboard on its own when you pull changes.
 
