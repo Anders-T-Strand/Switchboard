@@ -1,6 +1,9 @@
 # Runtime data (SQLite database, claude -p scratch folder)
 data/
 
+# Personal notes for Claude Code. CLAUDE.md is the shared, public one.
+CLAUDE.local.md
+
 # Python
 backend/.venv/
 __pycache__/
