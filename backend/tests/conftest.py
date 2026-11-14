@@ -37,12 +37,15 @@ FAKE_CLAUDE = textwrap.dedent(
     # Report what reached the CLI. (Plain variables keep this valid on Python 3.11.)
     key_present = "ANTHROPIC_API_KEY" in os.environ
     effort = os.environ.get("CLAUDE_CODE_EFFORT_LEVEL")
+    automem_off = os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
+    sources = args[args.index("--setting-sources") + 1] if "--setting-sources" in args else None
     history = sp.count('<turn role="user">')
     memory = sp.count("<excerpt ")
     print(json.dumps({
         "type": "result", "subtype": "success", "is_error": False,
         "result": (f"claude[{model}] answer. key_present={key_present} system_prompt={bool(sp)} "
-                   f"effort={effort} history={history} memory={memory} prompt={prompt!r}"),
+                   f"effort={effort} history={history} memory={memory} "
+                   f"sources={sources} automem_off={automem_off} prompt={prompt!r}"),
         "session_id": "s1", "num_turns": 1, "total_cost_usd": 0.0123,
         "usage": {"input_tokens": 10, "output_tokens": 20,
                   "cache_read_input_tokens": 100, "cache_creation_input_tokens": 50},

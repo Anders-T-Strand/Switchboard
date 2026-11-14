@@ -20,6 +20,10 @@ claude:
   # stdin avoids Windows argument quoting problems. Switch to "arg" only if your CLI ignores stdin.
   prompt_via: stdin
   disallowed_tools: [Bash, Edit, MultiEdit, Write, NotebookEdit]
+  # claude -p runs in data/claude-workdir, which is inside this repo, so it would load the repo's
+  # CLAUDE.md, CLAUDE.local.md and Claude Code's auto memory into every routed call.
+  # This keeps them out. Your own ~/.claude/CLAUDE.md still applies.
+  skip_project_context: true
   extra_args: []         # anything else to pass to claude -p, e.g. ["--strict-mcp-config"]
   system_prompt: >-
     You are chatting with the user through their personal dashboard.

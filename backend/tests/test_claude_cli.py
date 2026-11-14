@@ -62,10 +62,33 @@ def test_cli_failure_surfaces_message(cfg):
         ClaudeCLI(cfg.claude, cfg.claude_workdir).complete("sonnet", "please FAIL")
 
 
-def test_missing_cli(cfg):
+def test_missing_cli(cfg, monkeypatch):
+    # A dev machine has a real Claude Code install in one of the usual folders. Hide those too,
+    # or the search finds it and this test makes a real call instead of failing to find one.
+    monkeypatch.setattr("switchboard.providers.claude_cli.install_locations", lambda: [])
     cfg.claude.command = "definitely-not-installed-claude"
     with pytest.raises(ProviderError, match="not found on PATH"):
         ClaudeCLI(cfg.claude, cfg.claude_workdir).complete("sonnet", "hi")
+
+
+def test_skips_project_context_by_default(cfg):
+    # The working folder is inside the repo. Left alone, the CLI would load the repo's CLAUDE.md
+    # files and Claude Code's auto memory into every routed call.
+    comp = ClaudeCLI(cfg.claude, cfg.claude_workdir).complete("sonnet", "hi")
+    assert "sources=user automem_off=1" in comp.text
+
+
+def test_project_context_can_be_left_on(cfg, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", raising=False)
+    cfg.claude.skip_project_context = False
+    comp = ClaudeCLI(cfg.claude, cfg.claude_workdir).complete("sonnet", "hi")
+    assert "sources=None automem_off=None" in comp.text
+
+
+def test_own_setting_sources_wins(cfg):
+    cfg.claude.extra_args = ["--setting-sources", "user,project"]
+    comp = ClaudeCLI(cfg.claude, cfg.claude_workdir).complete("sonnet", "hi")
+    assert "sources=user,project " in comp.text  # passed once, as given
 
 
 def test_finds_claude_outside_path(cfg, fake_claude, monkeypatch, tmp_path):
