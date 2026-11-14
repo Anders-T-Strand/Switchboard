@@ -45,6 +45,9 @@ class ClaudeCfg(BaseModel):
     use_subscription: bool = True
     prompt_via: Literal["stdin", "arg"] = "stdin"
     disallowed_tools: list[str] = Field(default_factory=lambda: ["Bash", "Edit", "MultiEdit", "Write", "NotebookEdit"])
+    # Keep the repo's CLAUDE.md files and Claude Code's auto memory out of routed calls. The working
+    # folder is inside the repo, so claude -p would otherwise load them with every prompt.
+    skip_project_context: bool = True
     extra_args: list[str] = Field(default_factory=list)
     system_prompt: str | None = None
     logs_dir: str | None = None

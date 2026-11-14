@@ -140,6 +140,9 @@ class ClaudeCLI:
         if self.cfg.use_subscription:
             env.pop("ANTHROPIC_API_KEY", None)
             env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        if self.cfg.skip_project_context:
+            # Auto memory is keyed by git repo, so the working folder shares this repo's.
+            env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
         return env
 
     def version(self) -> str | None:
@@ -185,6 +188,11 @@ class ClaudeCLI:
             args += ["--system-prompt-file", str(sp_file)]
         if self.cfg.disallowed_tools:
             args += ["--disallowedTools", ",".join(self.cfg.disallowed_tools)]
+        # Claude Code reads CLAUDE.md files from every folder above where it starts, and the working
+        # folder is inside this repo. Loading only user settings keeps the repo's development notes
+        # out of routed calls. A --setting-sources in extra_args is used as given.
+        if self.cfg.skip_project_context and "--setting-sources" not in self.cfg.extra_args:
+            args += ["--setting-sources", "user"]
         args += list(self.cfg.extra_args)
 
         env = self._env()
