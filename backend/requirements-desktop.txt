@@ -1,0 +1,6 @@
+# The window and the tray icon for `python -m switchboard app`, on top of requirements.txt.
+# A file of their own, so the server, the tests and CI never need a GUI toolkit or a display.
+# start.ps1 installs them the first time the app is started.
+pywebview>=6.2
+pystray>=0.19.5
+pillow>=10.0

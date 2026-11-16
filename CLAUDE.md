@@ -10,7 +10,7 @@ A self-hosted dashboard that sends each prompt to the best-suited model, picks h
 
 - **Local models:** Qwen through Ollama. `qwen-moe` (`qwen3.6:35b-a3b`, MoE) is the default and `qwen-dense` (`qwen3.8:27b`) is the other.
 - **Claude:** Haiku, Sonnet and Opus through `claude -p` on a Claude Pro login. No API key is involved. The runner strips `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the environment.
-- **Starting it:** `switchboard.cmd` runs `start.ps1 --open`. That makes the venv, reinstalls Python packages when `requirements.txt` changes, rebuilds the frontend when its source changes, starts Qdrant in Docker if needed and opens http://127.0.0.1:8787. `start.sh` does the same on macOS and Linux.
+- **Starting it:** `switchboard.cmd` runs `start.ps1 app`. That makes the venv, reinstalls Python packages when `requirements.txt` or `requirements-desktop.txt` changes, rebuilds the frontend when its source changes and starts Qdrant in Docker if needed. Then it hands over to `pythonw -m switchboard app` and exits, so no terminal stays open. The app is the server, a window and a tray icon in one process, on http://127.0.0.1:8787. With arguments (`.\switchboard serve`, `.\switchboard ask "..."`) the launcher runs that command in the terminal with `--open`, as it always did. `start.sh` does the same setup on macOS and Linux and opens the browser.
 
 ## Commands
 
@@ -20,6 +20,10 @@ cd backend
 .\.venv\Scripts\python -m pip install pytest ruff
 .\.venv\Scripts\python -m pytest
 .\.venv\Scripts\python -m ruff check switchboard tests
+
+# the app window by hand. python, not pythonw, so the log also prints in the terminal
+.\.venv\Scripts\python -m pip install -r requirements-desktop.txt
+.\.venv\Scripts\python -m switchboard app --devtools
 
 # frontend
 cd frontend
@@ -64,7 +68,8 @@ npm run build    # strict type check, then the build
 
 ```
 config.yaml                  models, routing rules, effort map, learning, chat, index, pricing
-start.ps1 / switchboard.cmd  Windows launcher (start.sh for macOS and Linux)
+start.ps1 / switchboard.cmd  Windows launcher, the app window by default (start.sh for macOS and Linux)
+backend/requirements-desktop.txt   pywebview, pystray and pillow, for the app window only
 backend/switchboard/
   router.py        classifier prompt and schema, heuristic fallback, rules, effort, learning ladder, history shaping
   index.py         Qdrant indexer, similar-prompt lookup, search and memory
@@ -76,7 +81,8 @@ backend/switchboard/
   db.py            SQLite schema (WAL) and column migrations (ADDED_COLUMNS)
   config.py        pydantic models for config.yaml, with cross-reference validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
-  __main__.py      CLI: serve (--open), ask (--model, --effort, --task, --chat ID|last, --json), sync
+  desktop.py       the app window: uvicorn in a thread, pywebview window, pystray tray icon, one copy per port, log file
+  __main__.py      CLI: serve (--open), app (--hidden, --devtools), ask (--model, --effort, --task, --chat ID|last, --json), sync
 backend/tests/     pytest with the fakes described above
 frontend/src/      React 19 + TypeScript (strict) + Vite
   pages/           Overview, Console, Requests, Tasks, Models
@@ -92,6 +98,12 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 - **The app's own Claude calls and this file:** `data/claude-workdir` is inside the repo, so `claude -p` would read this file, `CLAUDE.local.md` and Claude Code's auto memory for the repo on every routed call. `claude.skip_project_context` (on by default) keeps all three out by passing `--setting-sources user` and setting `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. `~/.claude/CLAUDE.md` still loads.
 - **Tests must never reach a real `claude`:** a dev machine has one installed, and the runner looks in the usual install folders when the command isn't on PATH. A test that makes the CLI unfindable has to patch `install_locations` as well, or it makes a real call.
 - **Console CSS:** the Console fills the window on desktop (`.main.main-fill`). The grid needs `grid-template-rows: minmax(0, 1fr)`, or the thread grows instead of scrolling.
+- **A second instance needs its own config:** never start one on the default `config.yaml` while testing. It would share `data/` and the Qdrant collection, where point ids are request ids, so a fresh database overwrites real vectors. Point `SWITCHBOARD_CONFIG` at a copy with another `server.port` and either `index.enabled: false` or another `index.qdrant.collection`. To keep test prompts off Claude and the GPU, leave only a local model in that copy and aim `ollama.base_url` at a stub.
+- **The app has no console:** under `pythonw`, `sys.stdout` and `sys.stderr` are None, so `print` does nothing and a traceback goes nowhere. `desktop.setup_logging` sends logging and stray output to `data/logs/switchboard.log`, and anything that stops the app has to end in `desktop.alert`, which is a dialog there.
+- **GUI imports stay inside functions in `desktop.py`:** CI installs `requirements.txt` only. A module-level import of `webview`, `pystray` or `PIL` breaks the suite everywhere, and a test checks for it. The window and the tray icon are faked in tests, so what only a display can show (`run_gui` and the Windows helpers under it) has to be checked by hand.
+- **Closing is not quitting:** the X button hides the window and the server runs on until Quit in the tray menu. On Windows only a close the user asked for is cancelled (the X, Alt+F4, Close window on the taskbar). A plain `WM_CLOSE`, which is what `taskkill` and Task Manager send, and Windows shutting down close it for real, and cancelling those would block shutdown.
+- **The taskbar name is not the window title:** Windows calls a `pythonw` window "Python" even with an AppUserModelID and a window icon. The name, the icon and what Pin to taskbar pins come from the relaunch properties `desktop._taskbar_identity` sets on the window. Keep `APP_ID` stable, because a pinned icon is matched to the running app by it.
+- **One copy per port:** the app binds the port before anything else. When that fails it posts to `/api/desktop/show` on whatever holds the port and exits. That route exists only in the app, not under `serve`.
 
 ## Next steps
 
@@ -109,6 +121,7 @@ Constraints that follow from the code and from the repo being public:
 - **Canvas:** a personal access token gives the REST API (upcoming assignments, due dates, submission status). It can't be scoped, so it carries full account access. If the school blocks student tokens, the calendar feed gives due dates without one.
 - **Schedule:** Switchboard only runs while it's open. Use both a Windows Task Scheduler job that runs a new `python -m switchboard brief` and a build on the first open of the day, keyed by date so it only builds once. `brief` has to work without the server running, like `sync` and unlike `ask`.
 - **Where it shows:** probably a new Today page. Brief items could become Tasks with one click.
+- **What the app window already has for it:** `python -m switchboard app --hidden` starts in the tray with no window, which is what a login item should run. `Shell.notify` in `desktop.py` shows a notification from the tray icon. Neither is wired to anything yet. `notify` has only run against a fake icon, so look at what Windows puts in a real notification's header. It may say Python, as the taskbar did before the window got its relaunch properties, and then `APP_ID` needs registering with Windows.
 
 ### 2. Give the Console's models some context
 

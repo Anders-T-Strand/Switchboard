@@ -80,9 +80,38 @@ if ($qdrant.Success -and $config -notmatch '(?m)^index:\s*\r?\n\s+enabled:\s*fal
     }
 }
 
+$run = $args
+
+# "app" is Switchboard in its own window. It runs under pythonw, which has no console, so this
+# window closes as soon as setup is done. The window needs a few packages the server doesn't.
+if ($run.Count -gt 0 -and $run[0] -eq "app") {
+    $desktopRequirements = Join-Path $root "backend\requirements-desktop.txt"
+    $desktopStamp = Join-Path $venv ".requirements-desktop-installed"
+    $installed = $true
+    if (-not (Test-Path $desktopStamp) -or (Get-Item $desktopRequirements).LastWriteTime -gt (Get-Item $desktopStamp).LastWriteTime) {
+        Write-Host "Installing the packages for the app window..."
+        & $python -m pip install -r $desktopRequirements
+        $installed = $LASTEXITCODE -eq 0
+        if ($installed) { New-Item -ItemType File -Force -Path $desktopStamp | Out-Null }
+    }
+    if ($installed) {
+        $quoted = $run | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+        $start = @{ ArgumentList = @("-m", "switchboard") + $quoted; WorkingDirectory = (Join-Path $root "backend") }
+        $pythonw = Join-Path $venv "Scripts\pythonw.exe"
+        if (Test-Path $pythonw) {
+            Start-Process -FilePath $pythonw @start
+        } else {
+            Start-Process -FilePath $python -WindowStyle Hidden @start
+        }
+        exit 0
+    }
+    Write-Host "Those didn't install, so Switchboard opens in your browser instead."
+    $run = @("--open")
+}
+
 Push-Location (Join-Path $root "backend")
 try {
-    & $python -m switchboard @args
+    & $python -m switchboard @run
 } finally {
     Pop-Location
 }

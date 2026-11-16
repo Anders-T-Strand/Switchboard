@@ -1,6 +1,7 @@
 """Command line entry point.
 
     python -m switchboard                 start the server and dashboard
+    python -m switchboard app             start it as a desktop app: its own window and a tray icon
     python -m switchboard ask "prompt"    send a prompt to the running server
     python -m switchboard sync            read Claude Code logs once and exit
 """
@@ -38,8 +39,7 @@ def _open_when_ready(url: str) -> None:
     threading.Thread(target=wait_and_open, daemon=True).start()
 
 
-def main(argv: list[str] | None = None) -> int:
-    _utf8_stdout()
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="switchboard", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--open", action="store_true", help="open the dashboard in your browser once it starts")
@@ -51,6 +51,13 @@ def main(argv: list[str] | None = None) -> int:
     serve.add_argument("--open", action="store_true", default=argparse.SUPPRESS,
                        help="open the dashboard in your browser once it starts")
 
+    app = sub.add_parser("app", help="start the server in its own window, with a tray icon")
+    app.add_argument("--host")
+    app.add_argument("--port", type=int)
+    app.add_argument("--hidden", action="store_true", help="start in the tray without showing the window")
+    app.add_argument("--devtools", action="store_true",
+                     help="open the web inspector, and turn on the right-click menu and browser keys such as F5")
+
     ask = sub.add_parser("ask", help="send a prompt to the running server")
     ask.add_argument("prompt", nargs="+", help='prompt text, or "-" to read it from stdin')
     ask.add_argument("--model", default="auto", help="model key from config.yaml, or auto")
@@ -60,8 +67,19 @@ def main(argv: list[str] | None = None) -> int:
     ask.add_argument("--json", action="store_true", help="print the full JSON response")
 
     sub.add_parser("sync", help="read Claude Code logs once and print a summary")
+    return parser
 
+
+def main(argv: list[str] | None = None) -> int:
+    _utf8_stdout()
+    parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.cmd == "app":
+        # Before the config loads: the app may have no console, so it reports a bad config itself.
+        from . import desktop
+
+        return desktop.run(args)
 
     from .config import get_config
 
