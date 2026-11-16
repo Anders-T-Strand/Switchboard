@@ -15,13 +15,14 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 - **One chat, several models.** A conversation can move between the local model and Claude, with history passed along in the form each one takes, and follow-ups rated in the context of what they refer to.
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
-- **Tested and checked.** 88 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
+- **Its own window on Windows.** `switchboard.cmd` opens the dashboard as a desktop app, with a tray icon and its own name and icon on the taskbar, and no terminal left open. It is the same local server in one Python process, with no Electron and no bundled exe.
+- **Tested and checked.** 124 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    UI["React dashboard"] <-->|REST| API["FastAPI"]
+    UI["React dashboard<br/>app window or browser tab"] <-->|REST| API["FastAPI"]
     CLI["switchboard ask"] -->|REST| API
     API --> CL["Classifier<br/>local model already in VRAM"]
     CL -->|"task type, complexity, reasoning"| RT["Rules, effort map, learning ladder"]
@@ -43,10 +44,11 @@ flowchart TB
 - **SQLite is the record, Qdrant is derived.** Vectors can be rebuilt at any time. Each indexed turn records which embedding model made it, so changing models re-indexes, and a missing or resized collection is recreated from SQLite.
 - **Learning comes from you, not from the models grading themselves.** A model judging its own answers would confirm its own mistakes, and having Claude grade every answer would cost a Claude call per prompt. So the votes are your ratings, plus corrections and approvals the classifier reads from your next message. Those count as half a rating, since they're an inference, and your own rating always replaces them. Moves need several similar votes, and every move is shown with the prompts behind it.
 - **History is shaped per provider.** Ollama gets earlier turns as chat messages. Claude gets a transcript in its system prompt, which also covers turns another model answered. Both are trimmed oldest first to a per-provider budget.
+- **A window around the server, not a second app.** The desktop app is the same FastAPI server and the same built dashboard. pywebview shows it in a WebView2 window and pystray adds the tray icon, all in the Python process that runs the server. Electron or Tauri would have meant a second toolchain and a packaging step for the same page. The server's port is also the lock that keeps it to one copy: a second launch finds the port taken and asks the first to bring its window forward.
 
 ## Tech stack
 
-Python 3.11+, FastAPI, SQLite, Qdrant, Ollama, Claude Code CLI. React 19, TypeScript, Vite. pytest, ruff and GitHub Actions.
+Python 3.11+, FastAPI, SQLite, Qdrant, Ollama, Claude Code CLI. React 19, TypeScript, Vite. pywebview and pystray for the app window. pytest, ruff and GitHub Actions.
 
 ## How routing works
 
@@ -124,6 +126,8 @@ The embedding model is small (about 640 MB) and stays loaded next to your chat m
 - [Ollama](https://ollama.com) with at least one model pulled
 - [Claude Code](https://code.claude.com), installed and logged in with your Claude account
 
+The app window on Windows is drawn by the WebView2 runtime. Windows 11 includes it and Windows 10 usually has it. Without it, use the browser instead (`.\switchboard serve`).
+
 ## Setup on Windows
 
 ```powershell
@@ -140,9 +144,20 @@ claude -p "say hi"
 .\switchboard
 ```
 
-The dashboard opens in your browser at http://127.0.0.1:8787. You can also double-click `switchboard.cmd` in Explorer, or make a shortcut to it and pin that to the taskbar. `switchboard.ico` next to it is the dashboard's logo, for the shortcut's icon (Properties, Change Icon).
+Switchboard opens in its own window. The terminal shows the setup, which takes a while the first time, and closes once the window is up. You can also double-click `switchboard.cmd` in Explorer.
 
-After the first run it just starts the server. It rebuilds the dashboard on its own when you pull changes.
+After the first run it just starts. It rebuilds the dashboard on its own when you pull changes.
+
+### The app window
+
+- **Closing the window doesn't stop Switchboard.** It hides to a tray icon and the server keeps running, so `ask` in a terminal still works. Click the tray icon to get the window back, or right-click it for Open, Open in browser and Quit. Quit is what stops the server. Windows 11 puts new tray icons behind the `^` arrow next to the clock, and you can drag this one out of there.
+- **One copy runs at a time.** Starting it again brings the window that's already open to the front.
+- **To keep it on the taskbar,** right-click its taskbar icon while it's running and choose Pin to taskbar. Pin the running app like this and not a shortcut to `switchboard.cmd`, or the taskbar shows the shortcut and the app as two icons. The pin still runs `switchboard.cmd`, so it keeps picking up what you pull.
+- **The server log is a file,** since there is no terminal to print to: `data\logs\switchboard.log`. It starts a new file at 1 MB and keeps the two before it. If Switchboard can't start, a dialog says why.
+- **Quit waits five seconds** for a prompt that's still being answered, then drops it.
+- **It isn't a browser.** There is no right-click menu, and F5 and Ctrl+F do nothing. Text can be selected and copied, links in answers open in your browser, and the chat downloads ask where to save. `python -m switchboard app --devtools` turns the right-click menu and the browser keys on and opens the web inspector.
+
+Prefer a browser tab? `.\switchboard serve` keeps the server in the terminal and opens the dashboard at http://127.0.0.1:8787, the way it worked before there was a window. It is the same server on the same port, so run one or the other.
 
 To start it from any folder, add this to your PowerShell profile (`notepad $PROFILE`) with your own path:
 
@@ -162,7 +177,9 @@ ollama pull qwen3-embedding:0.6b
 ./start.sh --open
 ```
 
-`start.sh` does the same as the Windows launcher: it sets up Python, builds the dashboard when needed, starts Qdrant in Docker if it isn't running, and opens the dashboard.
+`start.sh` does the same setup as the Windows launcher: it sets up Python, builds the dashboard when needed and starts Qdrant in Docker if it isn't running. Then it runs the server in the terminal and opens the dashboard in your browser.
+
+The app window is built and tested on Windows. pywebview and pystray also run on macOS and Linux, so `python -m switchboard app` may work there once `backend/requirements-desktop.txt` is installed, but that is untested.
 
 ### Manual setup
 
@@ -177,12 +194,15 @@ npm install
 npm run build
 
 cd ..\backend
-python -m switchboard
+python -m switchboard                      # the server. Add --open for a browser tab
+
+pip install -r requirements-desktop.txt    # or the app window, which needs these as well
+python -m switchboard app
 ```
 
 ## Using it from the terminal
 
-With the server running:
+With Switchboard running, as the app or as a server:
 
 ```powershell
 cd backend
@@ -198,7 +218,7 @@ The routing decision, token counts and chat id print to stderr and the answer to
 
 ## Configuration
 
-Everything lives in `config.yaml`. Restart the server after editing it.
+Everything lives in `config.yaml`. Restart Switchboard after editing it. With the app window that means Quit in the tray menu first, since closing the window leaves it running.
 
 | Section | What it controls |
 |---|---|
@@ -235,7 +255,7 @@ cd frontend
 npm run dev
 ```
 
-CI runs the same lint and tests on Ubuntu (Python 3.11 and 3.13) and Windows, plus the frontend type check and build.
+CI runs the same lint and tests on Ubuntu (Python 3.11 and 3.13) and Windows, plus the frontend type check and build. The tests for the app window put fakes where the window and the tray icon go, so they need no display, and CI never installs `requirements-desktop.txt`.
 
 ```
 backend/switchboard/
@@ -248,6 +268,7 @@ backend/switchboard/
   db.py            SQLite schema and migrations
   config.py        config.yaml models and validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
+  desktop.py       the app window: server thread, tray icon, one copy per port, log file
 backend/tests/     pytest suite
 frontend/src/      React + TypeScript dashboard
 ```
@@ -257,3 +278,4 @@ frontend/src/      React + TypeScript dashboard
 - Train a router on the rated turns (the Qdrant vectors make good features) and compare it against the classifier and the rating-based ladder
 - Stream answers as they're generated
 - Re-run a turn on a different model to compare answers
+- Start with Windows, in the tray, and send notifications from there. `app --hidden` and the tray icon are in place for both
