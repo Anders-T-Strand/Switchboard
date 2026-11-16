@@ -216,19 +216,24 @@ def test_hand_over_when_another_web_server_has_the_port():
         other.server_close()
 
 
-def test_hand_over_when_something_that_is_not_http_has_the_port():
+@pytest.mark.parametrize("greeting", [b"", b"SSH-2.0-OpenSSH_9.6\r\n"], ids=["hangs up", "talks another protocol"])
+def test_hand_over_when_something_that_is_not_http_has_the_port(greeting):
     other = socket.socket()
     other.bind(("127.0.0.1", 0))
     other.listen()
 
-    def hang_up():
+    def answer():
         while True:
             try:
-                other.accept()[0].close()
+                conn = other.accept()[0]
             except OSError:
                 return
+            with conn:
+                if greeting:
+                    conn.recv(4096)  # take the request first, or closing resets the connection
+                    conn.sendall(greeting)
 
-    threading.Thread(target=hang_up, daemon=True).start()
+    threading.Thread(target=answer, daemon=True).start()
     try:
         assert desktop.hand_over(f"http://127.0.0.1:{other.getsockname()[1]}", timeout=5) == "other"
     finally:

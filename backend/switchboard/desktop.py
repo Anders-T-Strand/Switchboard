@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import http.client
 import json
 import logging
 import os
@@ -177,7 +178,7 @@ def claim_port(host: str, port: int) -> socket.socket | None:
 
 def _fetch_json(request: str | urllib.request.Request, timeout: float) -> dict | None:
     """The JSON object a request returns. None for an HTTP error status or a body that isn't one.
-    Raises OSError when nothing answers."""
+    Raises OSError when nothing answers, and http.client.HTTPException when the answer isn't HTTP."""
     try:
         with _http.open(request, timeout=timeout) as r:
             data = json.load(r)
@@ -201,7 +202,7 @@ def hand_over(url: str, *, show: bool = True, timeout: float = 15.0) -> str:
                 return "app"
         # No such route, or not asked to show. The health check says whether it is Switchboard at all.
         return "server" if (_fetch_json(url + "/api/health", timeout) or {}).get("ok") is True else "other"
-    except OSError:
+    except (OSError, http.client.HTTPException):  # nothing answers, or it doesn't speak HTTP
         return "other"
 
 
@@ -292,7 +293,7 @@ class ServerThread:
                 with _http.open(url + "/api/health", timeout=2) as r:
                     if r.status == 200:
                         return True
-            except OSError:
+            except (OSError, http.client.HTTPException):
                 time.sleep(0.1)
         return False
 
