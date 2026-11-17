@@ -18,5 +18,8 @@ __all__ = ["OFF", "Brief", "Busy", "Found", "ItemNotFound", "Source", "SourceErr
 
 
 def load_sources(cfg: Config) -> list[Source]:
-    """The sources this config has set up. There are none yet. Coursework and mail come next."""
-    return []
+    """Every source there is, connected or not. One that isn't connected is skipped by a build, and
+    the Today page says how to connect it. Mail comes next."""
+    from .sources.canvas_feed import CanvasFeed
+
+    return [CanvasFeed(cfg.brief.coursework)]

@@ -1,9 +1,11 @@
-"""Shared fixtures: a temp config, a fake Ollama (httpx MockTransport) and a fake `claude` CLI."""
+"""Shared fixtures: a temp config, a fake Ollama (httpx MockTransport), a fake `claude` CLI and an
+empty credential store for every test."""
 
 from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import stat
 import sys
@@ -14,9 +16,39 @@ from pathlib import Path
 import httpx
 import pytest
 
+from switchboard import credentials
 from switchboard.config import Config
 from switchboard.db import init_db
 from switchboard.providers.ollama import OllamaClient
+
+
+class FakeKeyring:
+    """Stands in for the keyring module."""
+
+    def __init__(self):
+        self.saved: dict[tuple[str, str], str] = {}
+
+    def get_password(self, service, name):
+        return self.saved.get((service, name))
+
+    def set_password(self, service, name, value):
+        self.saved[(service, name)] = value
+
+    def delete_password(self, service, name):
+        del self.saved[(service, name)]  # raises when there is nothing to delete, as keyring does
+
+
+@pytest.fixture(autouse=True)
+def vault(monkeypatch) -> FakeKeyring:
+    """An empty credential store for every test, whether it asks for one or not. Without this, a
+    test on a machine where a real feed link or sign-in is saved would find it and use it."""
+    fake = FakeKeyring()
+    monkeypatch.setattr(credentials, "_store", lambda: fake)
+    for name in list(os.environ):
+        if name.startswith("SWITCHBOARD_") and name != "SWITCHBOARD_CONFIG":
+            monkeypatch.delenv(name)  # a secret set in the environment wins over the store
+    return fake
+
 
 FAKE_CLAUDE = textwrap.dedent(
     """

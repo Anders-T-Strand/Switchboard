@@ -58,9 +58,14 @@ export function Today() {
           Switchboard.
         </p>
       )}
-      {data.enabled && data.sources.length === 0 && (
-        <p className="hint">Nothing is connected to the brief yet, so a build has nothing to read.</p>
-      )}
+      {data.enabled &&
+        data.sources
+          .filter((s) => !s.connected && s.setup)
+          .map((s) => (
+            <p className="hint" key={s.name}>
+              {s.label} isn't connected. Run <code>{s.setup}</code> in the <code>backend</code> folder.
+            </p>
+          ))}
       {(error || brief.error || tasks.error) && <ErrorNote>{error ?? brief.error ?? tasks.error}</ErrorNote>}
       {failed.map((s) => (
         <ErrorNote key={s.name}>

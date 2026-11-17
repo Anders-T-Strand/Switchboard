@@ -6,6 +6,10 @@ file, and never under data/, which is the parent of the folder `claude -p` runs 
 
 An environment variable overrides the store, for a machine without one. Its name is SWITCHBOARD_
 and the secret's name in capitals, so `canvas_feed_url` is read from SWITCHBOARD_CANVAS_FEED_URL.
+
+Setting SWITCHBOARD_NO_CREDENTIAL_STORE turns the store off altogether. A second instance started
+to try something out shares this machine's store with the real one, and this keeps it from signing
+in as you and reading your real mail or coursework.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from __future__ import annotations
 import os
 
 SERVICE = "Switchboard"
+OFF_SWITCH = "SWITCHBOARD_NO_CREDENTIAL_STORE"
 
 
 class CredentialError(RuntimeError):
@@ -25,6 +30,8 @@ def env_name(name: str) -> str:
 
 def _store():
     """The keyring module. Imported here, so nothing else needs it installed or a store to exist."""
+    if os.environ.get(OFF_SWITCH):
+        raise CredentialError(f"the credential store is turned off by {OFF_SWITCH}")
     import keyring
 
     return keyring

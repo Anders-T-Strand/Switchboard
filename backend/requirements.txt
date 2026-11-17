@@ -5,3 +5,4 @@ pyyaml>=6.0
 pydantic>=2.7
 qdrant-client>=1.12
 keyring>=25.0
+tzdata>=2024.1

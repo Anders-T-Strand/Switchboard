@@ -16,7 +16,7 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
 - **Its own window on Windows.** `switchboard.cmd` opens the dashboard as a desktop app, with a tray icon and its own name and icon on the taskbar, and no terminal left open. It is the same local server in one Python process, with no Electron and no bundled exe.
-- **Tested and checked.** 162 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
+- **Tested and checked.** 192 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
 
 ## Architecture
 
@@ -120,19 +120,26 @@ The embedding model is small (about 640 MB) and stays loaded next to your chat m
 
 ## Today
 
-The Today page is where a morning brief will land: a list, built once a day, of what needs doing. The first part is in place. It has its own tables, an API, a `brief` command and the page itself, which for now shows your open tasks. The sources that fill it, coursework and mail, come next.
-
-The rules were set before any source existed:
-
-- **It never touches the router or the chat tables.** What a brief reads is private, while chats are indexed and can reach Claude through Memory or a fallback. So brief items live in tables of their own, and the code that builds them has no path to Claude.
-- **A source can't break the others, or leak through an error.** One that fails is reported and the rest go on. The page shows only a message the source wrote for it. What an unexpected error says is kept out of the log and the database, because it can repeat a private address.
-- **Text from outside is treated as untrusted.** It is cut to length before it is stored, and only `https` links are kept.
-- **Secrets go in the operating system's credential store,** through `keyring`. Never in a config file or the data folder.
+The Today page is a morning brief: a list, built once a day, of what needs doing. Coursework is in, read from a Canvas calendar feed that lists every assignment with its due date. Mail comes next. The page also shows your open tasks.
 
 ```powershell
-python -m switchboard brief           # build today's brief now
-python -m switchboard brief status    # the last build, as counts and nothing from the items
+python -m switchboard brief connect canvas   # paste your calendar feed link at a hidden prompt
+python -m switchboard brief                  # build today's brief now
+python -m switchboard brief status           # the last build, as counts and nothing from the items
 ```
+
+How coursework gets there:
+
+- **The feed link is a secret.** Anyone who has it can read your calendar, so it goes in the operating system's credential store through `keyring`, never in a config file or the data folder. `connect` checks that the link returns a calendar before it saves it, and prints only the feed's shape: how many events, how their ids are built, what kind of dates they carry.
+- **A small calendar reader of its own** takes four properties from each event and leaves the rest, including the description, which is text an instructor wrote. A link is kept only when it is `https` and goes back to the same Canvas the feed came from.
+- **The feed can't say whether you handed something in.** So you tick coursework off yourself, and an assignment leaves the list two days after it was due.
+- **The page shows what a source still lists.** An item that drops out stays in the database. It comes back if its due date moves, and it keeps a status you gave it.
+
+The rules every source has to keep:
+
+- **It never touches the router or the chat tables.** What a brief reads is private, while chats are indexed and can reach Claude through Memory or a fallback. So brief items live in tables of their own, and the code that builds them has no path to Claude.
+- **A source can't break the others, or leak through an error.** One that fails is reported, the rest go on, and the last list stays in place. The page shows only a message the source wrote for it. What an unexpected error says is kept out of the log and the database, because it can repeat a private address.
+- **Text from outside is treated as untrusted.** It is cut to length before it is stored, and only `https` links are kept.
 
 ## Requirements
 
@@ -251,7 +258,7 @@ Settings of your own that shouldn't be published go in `config.local.yaml`, next
 | `routing.fallback_order` | What to try when the chosen model fails. |
 | `claude` | CLI path, timeout, tools to block, `use_subscription`, which strips `ANTHROPIC_API_KEY` from the `claude -p` environment so routed calls use your plan instead of API billing, and `skip_project_context`, which keeps this repo's `CLAUDE.md` files and Claude Code's auto memory out of routed calls. |
 | `pricing` | Per-million-token prices used for the API-rate estimates. |
-| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. |
+| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. `coursework` sets how far ahead an assignment is listed (`lookahead_days`) and how long after its due date (`overdue_days`). |
 | `server.host` | Set to your Tailscale IP or `0.0.0.0` to open the dashboard from other devices. There is no login, so only expose it on a private network. |
 
 To send moderate coding work to Claude as well, uncomment the `code` rule in `config.yaml`. If Opus isn't available on your plan in Claude Code, complexity 5 prompts fall back to Sonnet on their own, or point the `expert` rule at `claude-sonnet`.
@@ -288,7 +295,7 @@ backend/switchboard/
   config.py        config.yaml models and validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
   desktop.py       the app window: server thread, tray icon, one copy per port, log file
-  brief/           the morning brief: what sources hand in, its own tables, the build and the brief command
+  brief/           the morning brief: its sources (a Canvas calendar feed so far), its own tables, the build and the brief command
   credentials.py   secrets in the operating system's credential store, through keyring
 backend/tests/     pytest suite
 frontend/src/      React + TypeScript dashboard

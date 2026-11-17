@@ -1,11 +1,13 @@
 """The `brief` command.
 
-    python -m switchboard brief            build today's brief now
-    python -m switchboard brief status     what the last build found, as counts
-    python -m switchboard brief demo       fill a test database with made-up items
+    python -m switchboard brief                     build today's brief now
+    python -m switchboard brief status              what the last build found, as counts
+    python -m switchboard brief connect canvas      save your Canvas calendar feed link
+    python -m switchboard brief disconnect canvas   remove it again
+    python -m switchboard brief demo                fill a test database with made-up items
 
-`status` prints numbers and nothing from the items themselves, so its output is safe to paste
-somewhere or to show to an assistant.
+`status` and `connect` print numbers and shapes and nothing from the items themselves, so their
+output is safe to paste somewhere or to show to an assistant.
 """
 
 from __future__ import annotations
@@ -14,9 +16,11 @@ import sys
 import time
 from datetime import datetime
 
+from .. import credentials
 from ..config import REPO_ROOT, Config
 from ..db import init_db
 from . import demo, load_sources
+from .base import SourceError
 from .build import OFF, Brief
 
 BUILD_TIMEOUT_S = 15 * 60
@@ -157,7 +161,65 @@ def _demo(cfg: Config) -> int:
     return 0
 
 
+def _connect_canvas(cfg: Config) -> int:
+    """Ask for the feed link without showing it, check that it really is a calendar, then save it
+    to the credential store. What it prints is the feed's shape and nothing it says."""
+    import getpass
+
+    import httpx
+
+    from .sources import canvas_feed, ical
+
+    print("In Canvas, open Calendar, click Calendar Feed and copy the link.")
+    url = getpass.getpass("Paste it here (it won't be shown): ").strip()
+    if url.lower().startswith("webcal://"):
+        url = "https://" + url[len("webcal://"):]
+    try:
+        host = httpx.URL(url).host if url.lower().startswith("https://") else ""
+    except Exception:
+        host = ""
+    if not host:
+        print("Not saved. That isn't an https link.", file=sys.stderr)
+        return 1
+
+    feed = canvas_feed.CanvasFeed(cfg.brief.coursework)
+    now = datetime.now().astimezone()
+    try:
+        events = ical.events(feed.fetch(url), now.tzinfo)
+        credentials.save(canvas_feed.FEED_URL, url)
+    except (SourceError, credentials.CredentialError) as e:
+        print(f"Not saved. {e}", file=sys.stderr)
+        return 1
+    print("Saved the link to this machine's credential store.")
+    print("\n".join(canvas_feed.shape(events, host)))
+    print(f"The brief would list {len(feed.select(events, now, host))} of them right now.")
+    if not cfg.brief.enabled:
+        print(OFF)
+    return 0
+
+
+def _disconnect_canvas(cfg: Config) -> int:
+    from .sources import canvas_feed
+
+    removed = credentials.forget(canvas_feed.FEED_URL)
+    print("Removed the Canvas feed link." if removed else "There was no Canvas feed link saved.")
+    return 0
+
+
+TARGETS = {"canvas": (_connect_canvas, _disconnect_canvas)}
+
+
+def _target(args, cfg: Config) -> int:
+    if args.target not in TARGETS:
+        print(f"brief {args.action} needs to know what: {', '.join(TARGETS)}", file=sys.stderr)
+        return 2
+    connect, disconnect = TARGETS[args.target]
+    return (connect if args.action == "connect" else disconnect)(cfg)
+
+
 def run(args, cfg: Config) -> int:
+    if args.action in ("connect", "disconnect"):
+        return _target(args, cfg)
     try:
         return {"build": _build, "status": _status, "demo": _demo}[args.action](cfg)
     except ServerError as e:
