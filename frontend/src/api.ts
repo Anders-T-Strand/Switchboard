@@ -149,6 +149,63 @@ export type Task = {
 };
 export type TaskStatus = "todo" | "doing" | "done";
 
+export type BriefItemStatus = "open" | "done" | "dismissed";
+
+/** One thing the morning brief says needs attention. */
+export type BriefItem = {
+  id: number;
+  source: string;
+  title: string;
+  context: string | null;
+  summary: string | null;
+  category: string | null;
+  /** Who can take the next step. */
+  owner: "you" | "model";
+  reason: string | null;
+  /** A date (YYYY-MM-DD) or a UTC timestamp. */
+  due_at: string | null;
+  received_at: string | null;
+  link: string | null;
+  status: BriefItemStatus;
+  status_at: string | null;
+  task_id: number | null;
+  task_title: string | null;
+  first_seen_at: string;
+};
+
+export type BriefSourceResult = {
+  name: string;
+  label: string;
+  connected: boolean;
+  ok: boolean | null;
+  items: number;
+  error: string | null;
+};
+
+export type BriefRun = {
+  id: number;
+  day: string;
+  started_at: string;
+  finished_at: string | null;
+  status: "running" | "ok" | "partial" | "error";
+  started_by: string;
+  sources: BriefSourceResult[];
+  model_key: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  model_ms: number;
+  error: string | null;
+};
+
+export type Brief = {
+  enabled: boolean;
+  day: string;
+  building: boolean;
+  run: BriefRun | null;
+  sources: { name: string; label: string; connected: boolean }[];
+  items: BriefItem[];
+};
+
 export type ModelStats = {
   model_key: string;
   label: string;
@@ -301,6 +358,7 @@ export type ConfigView = {
     search_min_score: number;
   };
   memory: { max_items: number; min_score: number; max_chars: number };
+  brief: { enabled: boolean };
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -373,4 +431,10 @@ export const api = {
   updateTask: (id: number, body: Partial<Pick<Task, "title" | "notes" | "status">>) =>
     request<Task>(`/api/tasks/${id}`, { method: "PATCH", body: json(body) }),
   deleteTask: (id: number) => request<void>(`/api/tasks/${id}`, { method: "DELETE" }),
+
+  brief: () => request<Brief>("/api/brief"),
+  buildBrief: () => request<Brief>("/api/brief/run", { method: "POST" }),
+  setBriefItem: (id: number, status: BriefItemStatus) =>
+    request<BriefItem>(`/api/brief/items/${id}`, { method: "PATCH", body: json({ status }) }),
+  briefItemTask: (id: number) => request<BriefItem>(`/api/brief/items/${id}/task`, { method: "POST" }),
 };

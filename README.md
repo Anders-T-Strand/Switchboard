@@ -16,7 +16,7 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
 - **Its own window on Windows.** `switchboard.cmd` opens the dashboard as a desktop app, with a tray icon and its own name and icon on the taskbar, and no terminal left open. It is the same local server in one Python process, with no Electron and no bundled exe.
-- **Tested and checked.** 125 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
+- **Tested and checked.** 162 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
 
 ## Architecture
 
@@ -117,6 +117,22 @@ The embedding model is small (about 640 MB) and stays loaded next to your chat m
 - **Claude Code usage.** Your own Claude Code sessions are read from `~/.claude/projects/**/*.jsonl` every minute, so the dashboard shows usage by model and day even for work done outside it. Calls the router makes through `claude -p` are tagged separately. Chats on claude.ai don't write local logs, so they can't be counted.
 - **Cost at API rates.** A Pro plan isn't billed per token, so costs are shown as what the same usage would cost on the Claude API. Local answers are priced against a reference model (Sonnet by default) to estimate what running locally kept off Claude. Local and Claude tokenizers differ, so treat that one as a ballpark.
 - **Tasks.** A simple to do / in progress / done board. Attach prompts to a task to see how many tokens each piece of work takes.
+
+## Today
+
+The Today page is where a morning brief will land: a list, built once a day, of what needs doing. The first part is in place. It has its own tables, an API, a `brief` command and the page itself, which for now shows your open tasks. The sources that fill it, coursework and mail, come next.
+
+The rules were set before any source existed:
+
+- **It never touches the router or the chat tables.** What a brief reads is private, while chats are indexed and can reach Claude through Memory or a fallback. So brief items live in tables of their own, and the code that builds them has no path to Claude.
+- **A source can't break the others, or leak through an error.** One that fails is reported and the rest go on. The page shows only a message the source wrote for it. What an unexpected error says is kept out of the log and the database, because it can repeat a private address.
+- **Text from outside is treated as untrusted.** It is cut to length before it is stored, and only `https` links are kept.
+- **Secrets go in the operating system's credential store,** through `keyring`. Never in a config file or the data folder.
+
+```powershell
+python -m switchboard brief           # build today's brief now
+python -m switchboard brief status    # the last build, as counts and nothing from the items
+```
 
 ## Requirements
 
@@ -220,6 +236,8 @@ The routing decision, token counts and chat id print to stderr and the answer to
 
 Everything lives in `config.yaml`. Restart Switchboard after editing it. With the app window that means Quit in the tray menu first, since closing the window leaves it running.
 
+Settings of your own that shouldn't be published go in `config.local.yaml`, next to it. That file has the same shape, overrides whatever it names, and git ignores it.
+
 | Section | What it controls |
 |---|---|
 | `models` | Every model the router can use. `provider` is `ollama` or `claude_cli`. For Claude, `model` is the alias passed to `claude --model` and `max_effort` caps its effort. For Ollama, `think` pins thinking on or off. |
@@ -233,6 +251,7 @@ Everything lives in `config.yaml`. Restart Switchboard after editing it. With th
 | `routing.fallback_order` | What to try when the chosen model fails. |
 | `claude` | CLI path, timeout, tools to block, `use_subscription`, which strips `ANTHROPIC_API_KEY` from the `claude -p` environment so routed calls use your plan instead of API billing, and `skip_project_context`, which keeps this repo's `CLAUDE.md` files and Claude Code's auto memory out of routed calls. |
 | `pricing` | Per-million-token prices used for the API-rate estimates. |
+| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. |
 | `server.host` | Set to your Tailscale IP or `0.0.0.0` to open the dashboard from other devices. There is no login, so only expose it on a private network. |
 
 To send moderate coding work to Claude as well, uncomment the `code` rule in `config.yaml`. If Opus isn't available on your plan in Claude Code, complexity 5 prompts fall back to Sonnet on their own, or point the `expert` rule at `claude-sonnet`.
@@ -269,6 +288,8 @@ backend/switchboard/
   config.py        config.yaml models and validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
   desktop.py       the app window: server thread, tray icon, one copy per port, log file
+  brief/           the morning brief: what sources hand in, its own tables, the build and the brief command
+  credentials.py   secrets in the operating system's credential store, through keyring
 backend/tests/     pytest suite
 frontend/src/      React + TypeScript dashboard
 ```

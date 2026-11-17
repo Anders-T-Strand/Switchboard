@@ -51,6 +51,24 @@ export function shortDate(isoDate: string): string {
   return new Date(y, m - 1, d).toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+/** A due date the way people say it. `due` is a date (YYYY-MM-DD) or a timestamp. */
+export function dueLabel(due: string): { text: string; tone: "late" | "soon" | "later" } {
+  const dateOnly = due.length === 10;
+  const [y, m, d] = due.slice(0, 10).split("-").map(Number);
+  const at = dateOnly ? new Date(y, m - 1, d) : new Date(due);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const day = new Date(at.getFullYear(), at.getMonth(), at.getDate());
+  const days = Math.round((day.getTime() - today.getTime()) / 86_400_000);
+  const time = dateOnly ? "" : `, ${at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  const date = at.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  // A date with no time is due until that day ends.
+  if (days < 0 || (!dateOnly && at.getTime() < Date.now())) return { text: `Was due ${date}${time}`, tone: "late" };
+  if (days === 0) return { text: `Due today${time}`, tone: "soon" };
+  if (days === 1) return { text: `Due tomorrow${time}`, tone: "soon" };
+  return { text: `Due ${date}${time}`, tone: "later" };
+}
+
 export function capitalize(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
