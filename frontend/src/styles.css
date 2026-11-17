@@ -918,6 +918,87 @@ table.rows-clickable tbody tr:hover td {
   margin-top: 10px;
 }
 
+/* Today ------------------------------------------------------------------------ */
+
+.today-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.today-status {
+  color: var(--ink-2);
+}
+.today-section h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 19px;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+  border-bottom: 2px solid var(--line-strong);
+}
+.today-aside {
+  margin-left: auto;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 400;
+}
+.today-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.brief-from {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 3px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.brief-reason {
+  margin-top: 6px;
+}
+.due.late {
+  color: var(--danger);
+}
+.due.soon {
+  color: var(--brass);
+}
+.due.later {
+  color: var(--ink-3);
+}
+.brief-link {
+  align-self: center;
+  font-size: 13px;
+  padding: 4px 6px;
+}
+.today-closed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.today-closed li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 14px;
+}
+.today-closed-title {
+  color: var(--ink-3);
+  text-decoration: line-through;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Models ---------------------------------------------------------------------------- */
 
 .rules {

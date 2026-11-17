@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 
+from .brief import Brief, load_sources
 from .config import Config
 from .db import connect, make_title, now_iso, rows
 from .index import TurnIndex, build_memory_block
@@ -31,6 +32,8 @@ class Service:
         self.claude = ClaudeCLI(cfg.claude, cfg.claude_workdir)
         self.index = TurnIndex(cfg, self.ollama) if cfg.index.enabled else None
         self.router = Router(cfg, self.ollama, self.claude, self.index)
+        # The morning brief keeps to itself: its own tables, and never the router above.
+        self.brief = Brief(cfg, load_sources(cfg), create_task=self.create_task)
 
     # Prompts -------------------------------------------------------------------
 
@@ -540,4 +543,5 @@ class Service:
             "efforts": list(EFFORTS),
             "index": self.cfg.index.model_dump(exclude={"qdrant": {"api_key"}}),
             "memory": self.cfg.chat.memory.model_dump(),
+            "brief": self.cfg.brief.model_dump(),
         }

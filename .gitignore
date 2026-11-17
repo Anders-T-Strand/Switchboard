@@ -4,6 +4,9 @@ data/
 # Personal notes for Claude Code. CLAUDE.md is the shared, public one.
 CLAUDE.local.md
 
+# Your own settings, laid over config.yaml when it loads
+config.local.yaml
+
 # Python
 backend/.venv/
 __pycache__/

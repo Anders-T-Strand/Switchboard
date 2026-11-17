@@ -25,6 +25,12 @@ cd backend
 .\.venv\Scripts\python -m pip install -r requirements-desktop.txt
 .\.venv\Scripts\python -m switchboard app --devtools
 
+# the morning brief. status prints counts and nothing from the items, so its output is safe to share
+.\.venv\Scripts\python -m switchboard brief status
+# made-up items for working on the Today page. Only runs on a config with a data folder of its own
+$env:SWITCHBOARD_CONFIG = "C:\path\to\a\copy-of-config.yaml"
+.\.venv\Scripts\python -m switchboard brief demo
+
 # frontend
 cd frontend
 npm run dev      # hot reload, proxies /api to :8787
@@ -67,7 +73,8 @@ npm run build    # strict type check, then the build
 ## Code map
 
 ```
-config.yaml                  models, routing rules, effort map, learning, chat, index, pricing
+config.yaml                  models, routing rules, effort map, learning, chat, index, brief, pricing
+config.local.yaml            your own settings, laid over config.yaml when it loads. Gitignored
 start.ps1 / switchboard.cmd  Windows launcher, the app window by default (start.sh for macOS and Linux)
 backend/requirements-desktop.txt   pywebview, pystray and pillow, for the app window only
 backend/switchboard/
@@ -82,10 +89,12 @@ backend/switchboard/
   config.py        pydantic models for config.yaml, with cross-reference validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
   desktop.py       the app window: uvicorn in a thread, pywebview window, pystray tray icon, one copy per port, log file
-  __main__.py      CLI: serve (--open), app (--hidden, --devtools), ask (--model, --effort, --task, --chat ID|last, --json), sync
+  brief/           the morning brief: base.py (what a source hands in), store.py (its two tables), build.py, demo.py, cli.py
+  credentials.py   secrets in the operating system's credential store through keyring, with an env var override
+  __main__.py      CLI: serve (--open), app (--hidden, --devtools), ask (--model, --effort, --task, --chat ID|last, --json), brief (build, status, demo), sync
 backend/tests/     pytest with the fakes described above
 frontend/src/      React 19 + TypeScript (strict) + Vite
-  pages/           Overview, Console, Requests, Tasks, Models
+  pages/           Today, Overview, Console, Requests, Tasks, Models
   components/      RouteSteps ("How it was routed"), PatchBay, StackedColumns, bits
   styles.css       all styling, with the palette variables at the top
 ```
@@ -104,23 +113,38 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 - **Closing is not quitting:** the X button hides the window and the server runs on until Quit in the tray menu. On Windows only a close the user asked for is cancelled (the X, Alt+F4, Close window on the taskbar). A plain `WM_CLOSE`, which is what `taskkill` and Task Manager send, and Windows shutting down close it for real, and cancelling those would block shutdown.
 - **The taskbar name is not the window title:** Windows calls a `pythonw` window "Python" even with an AppUserModelID and a window icon. The name, the icon and what Pin to taskbar pins come from the relaunch properties `desktop._taskbar_identity` sets on the window. Keep `APP_ID` stable, because a pinned icon is matched to the running app by it.
 - **One copy per port:** the app binds the port before anything else. When that fails it posts to `/api/desktop/show` on whatever holds the port and exits. That route exists only in the app, not under `serve`.
+- **The brief stays out of the chat tables:** `_adopt_loose_requests` in `db.py` turns any request without a conversation into a chat at startup, and chats are indexed and can reach Claude through Memory. Brief data goes in `brief_runs` and `brief_items` only. A test checks that a build adds nothing to `requests`.
+- **What a brief source says when it fails is shown and saved:** raise `SourceError` with a message that is safe on the page. Any other exception is cut down to its type name, in the run and in the log, because an httpx error repeats the address it failed on, and a feed address is a secret.
+- **Real brief items are private:** they are someone's mail and coursework, and an assistant that reads them sends them to Claude. Don't open the Today page, read `brief_items` or call `/api/brief` on the real instance. Work with `brief demo` on a config of its own, and use `brief status`, which prints counts only.
+- **`config.local.yaml` is looked for next to the config in use:** so a second instance on its own config never picks up the real one. The launchers read the Qdrant address from `config.yaml` alone, and an override of it in the local file isn't seen by them.
+- **The brief command must not find the real server in a test:** it asks a running Switchboard to do the work when one answers on the configured port, which is 8787 in the test config too. Patch `brief_cli.Server.find`, as the `no_server` fixture does.
 
 ## Next steps
 
 ### 1. Morning brief (current)
 
-A page built each morning that lists what needs doing, starting with mail that needs a reply and upcoming Canvas assignments, with a first pass at what a model can draft and what needs a person. Nothing is built yet. The open questions are in `CLAUDE.local.md`.
+A Today page, built once a day, that lists what needs doing: mail that needs a reply, coursework that is due, and a first pass at what a model can draft and what needs a person. It is built in five steps, one PR each.
 
-Constraints that follow from the code and from the repo being public:
+1. **Foundations (done).** The `brief:` config section, the `config.local.yaml` overlay, `credentials.py`, the `brief_runs` and `brief_items` tables, a build with no sources yet, the API, the `brief` command and the Today page.
+2. **Coursework.** `brief connect canvas` and a parser for the Canvas calendar feed.
+3. **Mail.** `brief connect outlook`, Microsoft Graph, an answered-thread check and triage by the local model.
+4. **Draft on click.** A Draft button that writes with the local model.
+5. **Schedule and notify.** A loop in the server that builds once a day, a notification when it is ready, a build on first open and a start-with-Windows shortcut.
 
-- **Raw mail and course text stay local.** Force a local model for anything that reads them. Auto-routing can reach Claude through the rules or through `fallback_order`, and only a forced model never falls back.
-- **Keep those calls out of the chat tables, or make the indexer skip them.** Every answered turn is indexed, Memory can carry an indexed turn into a later Claude prompt, and indexed turns vote in the learning router.
-- **Mail and course text are untrusted input.** They can contain instructions aimed at the model. If Claude plans on summaries, run it with no tools (`--tools ""`) and no MCP servers (`--strict-mcp-config`). Models draft. Nothing gets sent or changed without a click.
-- **Personal settings stay out of the tracked `config.yaml`:** Canvas URL, mail queries, schedule. `SWITCHBOARD_CONFIG` already points the app at another file. Tokens go in Windows Credential Manager (the `keyring` package) or an env var, not in `data/`, which is the parent of the folder Claude runs in.
-- **Mail API:** Gmail API or Microsoft Graph, depending on the inbox. A Google OAuth client left in "Testing" status gets refresh tokens that expire after seven days, which would break an unattended job quietly.
-- **Canvas:** a personal access token gives the REST API (upcoming assignments, due dates, submission status). It can't be scoped, so it carries full account access. If the school blocks student tokens, the calendar feed gives due dates without one.
-- **Schedule:** Switchboard only runs while it's open. Use both a Windows Task Scheduler job that runs a new `python -m switchboard brief` and a build on the first open of the day, keyed by date so it only builds once. `brief` has to work without the server running, like `sync` and unlike `ask`.
-- **Where it shows:** probably a new Today page. Brief items could become Tasks with one click.
+Decisions already made:
+
+- **Mail is Outlook, read through Microsoft Graph** with the `Mail.Read` scope, which can't send or change anything. Sign-in is the device code flow on the `consumers` tenant, with the owner's own app registration. Its client id goes in `config.local.yaml` and the refresh token in the credential store. Registering an app needs a directory, which a personal account may have to create first.
+- **Triage reads the sender, the subject and `bodyPreview`,** the first 255 characters. The full body is fetched only when a draft is asked for.
+- **Coursework is the Canvas calendar feed,** because API tokens aren't available. It gives due dates and no submission status, so coursework is ticked off by hand. The feed address works like a password and goes in the credential store. An assignment due at 11:59 PM arrives as an all-day event.
+- **Delegate means sort, then draft on click.** Each item is marked `you` or `model`. Nothing is drafted until asked, and nothing is ever sent.
+- **Local only.** The brief never calls Claude, not even on summaries.
+
+Rules that follow from the code and from the repo being public:
+
+- **Raw mail and course text stay local.** A source calls `OllamaClient.chat` itself, with the model's own options so Ollama doesn't reload it. It never goes through the router, where a rule or `fallback_order` can reach Claude.
+- **Mail and course text are untrusted input.** They can contain instructions aimed at the model. Put them in a delimited block, ask for a fixed JSON schema, show what comes back as plain text, and build links from ids, never from a mail body.
+- **Personal settings go in `config.local.yaml` and secrets through `credentials.py`.** Neither goes in the tracked `config.yaml`, and no secret goes under `data/`, which is the parent of the folder Claude runs in.
+- **Schedule:** Switchboard only runs while it's open. The plan is a loop in the server that builds after a set time when today has no run, plus a build on the first open of the day. `python -m switchboard brief` already builds on demand, through the running server when there is one and in this process when there isn't.
 - **What the app window already has for it:** `python -m switchboard app --hidden` starts in the tray with no window, which is what a login item should run. `Shell.notify` in `desktop.py` shows a notification from the tray icon. Neither is wired to anything yet. `notify` has only run against a fake icon, so look at what Windows puts in a real notification's header. It may say Python, as the taskbar did before the window got its relaunch properties, and then `APP_ID` needs registering with Windows.
 
 ### 2. Give the Console's models some context

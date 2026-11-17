@@ -98,6 +98,49 @@ CREATE TABLE IF NOT EXISTS cc_files (
   size INTEGER NOT NULL DEFAULT 0,
   synced_at TEXT
 );
+
+-- The morning brief. Kept apart from requests on purpose: what a brief reads is private, and
+-- everything in requests becomes a chat, gets indexed and can reach Claude through Memory.
+CREATE TABLE IF NOT EXISTS brief_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  day TEXT NOT NULL,                 -- the local date the brief is for, YYYY-MM-DD
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  status TEXT NOT NULL,              -- running | ok | partial | error
+  started_by TEXT NOT NULL,          -- schedule | open | manual | cli | demo
+  sources TEXT,                      -- JSON: what each source returned, or why it failed
+  model_key TEXT,                    -- local model that sorted what needed sorting
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  model_ms INTEGER NOT NULL DEFAULT 0,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_brief_runs_day ON brief_runs(day);
+
+CREATE TABLE IF NOT EXISTS brief_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,              -- mail | coursework
+  external_id TEXT NOT NULL,         -- the source's own id, so a rebuild updates an item and never doubles it
+  title TEXT NOT NULL,
+  context TEXT,                      -- who it is from, or which course
+  summary TEXT,                      -- one line written by the local model
+  category TEXT,
+  owner TEXT NOT NULL DEFAULT 'you', -- you | model: who can take the next step
+  reason TEXT,
+  due_at TEXT,                       -- a date (YYYY-MM-DD) or a UTC timestamp
+  received_at TEXT,                  -- when the source last heard about it, such as a new message
+  link TEXT,                         -- opens the item where it lives. https only.
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'done', 'dismissed')),
+  status_at TEXT,                    -- when the status last changed
+  task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+  draft TEXT,                        -- written by the local model when asked. Nothing is ever sent.
+  draft_model TEXT,
+  drafted_at TEXT,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  UNIQUE (source, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_brief_items_status ON brief_items(status);
 """
 
 # Columns added after the first release. init_db adds any that an existing database lacks.

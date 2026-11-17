@@ -1,4 +1,6 @@
 # Switchboard config. Edit this file, then restart the server.
+# Settings of your own that shouldn't be published go in config.local.yaml, next to this file.
+# It has the same shape, overrides whatever it names, and git ignores it.
 
 server:
   host: 127.0.0.1        # 0.0.0.0 (or your Tailscale IP) makes the dashboard reachable from other devices
@@ -147,6 +149,11 @@ index:
     instructions: true           # Qwen3-Embedding query instructions. Set false for other models.
   interval_s: 30                 # how often to retry when Qdrant or the embedding model is unavailable
   search_min_score: 0.45         # chat search by meaning ignores weaker matches
+
+# The morning brief: a daily list of what needs doing, on the Today page. Off until you turn it on.
+# Turn it on in config.local.yaml, where everything personal about it belongs.
+brief:
+  enabled: false
 
 # USD per million tokens (Claude API list prices, Oct 2026). Used for API-equivalent cost
 # estimates only. Your Pro plan isn't billed per token, so treat these as "what this would

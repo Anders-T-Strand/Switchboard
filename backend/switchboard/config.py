@@ -186,6 +186,11 @@ class ChatCfg(BaseModel):
     memory: MemoryCfg = Field(default_factory=MemoryCfg)
 
 
+class BriefCfg(BaseModel):
+    """The morning brief: a daily list of what needs doing, shown on the Today page."""
+    enabled: bool = False
+
+
 class Config(BaseModel):
     server: ServerCfg = Field(default_factory=ServerCfg)
     ollama: OllamaCfg = Field(default_factory=OllamaCfg)
@@ -195,6 +200,7 @@ class Config(BaseModel):
     pricing: PricingCfg = Field(default_factory=PricingCfg)
     chat: ChatCfg = Field(default_factory=ChatCfg)
     index: IndexCfg = Field(default_factory=IndexCfg)
+    brief: BriefCfg = Field(default_factory=BriefCfg)
 
     @model_validator(mode="after")
     def _check_references(self) -> Config:
@@ -271,10 +277,38 @@ def config_path() -> Path:
     return Path(env).expanduser() if env else REPO_ROOT / "config.yaml"
 
 
-def load_config(path: Path | None = None) -> Config:
-    path = path or config_path()
+def local_config_path(base: Path) -> Path:
+    """The personal overlay for a config file: config.local.yaml in the same folder. It is
+    gitignored, so settings that say something about you stay out of the tracked config."""
+    return base.with_name("config.local.yaml")
+
+
+def merge(base: dict, over: dict) -> dict:
+    """`over` laid on top of `base`. Mappings merge key by key. Anything else, lists included,
+    replaces what was there."""
+    out = dict(base)
+    for key, value in over.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def _read_yaml(path: Path) -> dict:
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path.name} has to be a mapping of settings, not {type(raw).__name__}")
+    return raw
+
+
+def load_config(path: Path | None = None) -> Config:
+    path = path or config_path()
+    raw = _read_yaml(path)
+    local = local_config_path(path)
+    if local.is_file():
+        raw = merge(raw, _read_yaml(local))
     cfg = Config.model_validate(raw)
     cfg.data_path.mkdir(parents=True, exist_ok=True)
     cfg.claude_workdir.mkdir(parents=True, exist_ok=True)

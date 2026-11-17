@@ -8,8 +8,10 @@ import { Models } from "./pages/Models";
 import { Overview } from "./pages/Overview";
 import { Requests } from "./pages/Requests";
 import { Tasks } from "./pages/Tasks";
+import { Today } from "./pages/Today";
 
 const PAGES = [
+  { id: "today", title: "Today" },
   { id: "overview", title: "Overview" },
   { id: "console", title: "Console" },
   { id: "requests", title: "Requests" },
@@ -57,7 +59,7 @@ export default function App() {
     };
   }, [config.data, status.data]);
 
-  const page = PAGES.find((p) => p.id === route) ?? PAGES[0];
+  const page = PAGES.find((p) => p.id === route) ?? PAGES.find((p) => p.id === "overview")!;
   const st = status.data;
   const loaded = st?.models.filter((m) => m.loaded).map((m) => m.label) ?? [];
 
@@ -119,6 +121,8 @@ export default function App() {
             </div>
           ) : !config.data ? (
             <p className="muted">Connecting…</p>
+          ) : page.id === "today" ? (
+            <Today />
           ) : page.id === "overview" ? (
             <Overview days={days} />
           ) : page.id === "console" ? (

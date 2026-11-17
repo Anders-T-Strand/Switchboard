@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import claude_logs, stats
+from .brief import ItemNotFound
 from .config import REPO_ROOT, Config, get_config
 from .db import init_db
 from .service import NotFound, Service
@@ -58,6 +59,10 @@ class TaskPatch(BaseModel):
     status: str | None = None
 
 
+class BriefItemPatch(BaseModel):
+    status: str  # open | done | dismissed
+
+
 def _sync_loop(cfg: Config, stop: threading.Event) -> None:
     while not stop.is_set():
         try:
@@ -87,6 +92,7 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
     async def lifespan(app: FastAPI):
         stop = threading.Event()
         threads = []
+        svc.brief.recover()  # a build that was cut off by the last shutdown would read as still going
         if background_sync:
             threads.append(threading.Thread(target=_sync_loop, args=(cfg, stop), daemon=True, name="cc-sync"))
             if svc.index is not None:
@@ -235,6 +241,37 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
             svc.delete_task(task_id)
         except NotFound as e:
             not_found(e)
+
+    # Morning brief ---------------------------------------------------------------
+
+    @app.get("/api/brief")
+    def brief_view():
+        return svc.brief.view()
+
+    @app.post("/api/brief/run", status_code=202)
+    def brief_run():
+        """Start a build in the background. The page asks /api/brief until `building` is false."""
+        try:
+            svc.brief.start("manual")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return svc.brief.view()
+
+    @app.patch("/api/brief/items/{item_id}")
+    def brief_item(item_id: int, body: BriefItemPatch):
+        try:
+            return svc.brief.set_status(item_id, body.status)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except ItemNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.post("/api/brief/items/{item_id}/task")
+    def brief_item_task(item_id: int):
+        try:
+            return svc.brief.make_task(item_id)
+        except ItemNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
 
     # Stats and status ------------------------------------------------------------
 
