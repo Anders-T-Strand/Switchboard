@@ -15,6 +15,8 @@ from .base import Found, Usage, stamp
 
 
 class DemoSource:
+    setup = ""
+
     def __init__(self, name: str, label: str, make: Callable[[datetime], list[Found]]):
         self.name = name
         self.label = label

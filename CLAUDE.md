@@ -25,8 +25,9 @@ cd backend
 .\.venv\Scripts\python -m pip install -r requirements-desktop.txt
 .\.venv\Scripts\python -m switchboard app --devtools
 
-# the morning brief. status prints counts and nothing from the items, so its output is safe to share
+# the morning brief. status and connect print counts and shapes, nothing from the items, so their output is safe to share
 .\.venv\Scripts\python -m switchboard brief status
+.\.venv\Scripts\python -m switchboard brief connect canvas   # asks for the feed link at a hidden prompt. The owner runs this, never an assistant
 # made-up items for working on the Today page. Only runs on a config with a data folder of its own
 $env:SWITCHBOARD_CONFIG = "C:\path\to\a\copy-of-config.yaml"
 .\.venv\Scripts\python -m switchboard brief demo
@@ -89,9 +90,10 @@ backend/switchboard/
   config.py        pydantic models for config.yaml, with cross-reference validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
   desktop.py       the app window: uvicorn in a thread, pywebview window, pystray tray icon, one copy per port, log file
-  brief/           the morning brief: base.py (what a source hands in), store.py (its two tables), build.py, demo.py, cli.py
+  brief/           the morning brief: base.py (what a source hands in), store.py (its tables), build.py, demo.py, cli.py
+    sources/       ical.py (reads a calendar feed) and canvas_feed.py (coursework from a Canvas feed)
   credentials.py   secrets in the operating system's credential store through keyring, with an env var override
-  __main__.py      CLI: serve (--open), app (--hidden, --devtools), ask (--model, --effort, --task, --chat ID|last, --json), brief (build, status, demo), sync
+  __main__.py      CLI: serve (--open), app (--hidden, --devtools), ask (--model, --effort, --task, --chat ID|last, --json), brief (build, status, demo, connect, disconnect), sync
 backend/tests/     pytest with the fakes described above
 frontend/src/      React 19 + TypeScript (strict) + Vite
   pages/           Today, Overview, Console, Requests, Tasks, Models
@@ -107,7 +109,7 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 - **The app's own Claude calls and this file:** `data/claude-workdir` is inside the repo, so `claude -p` would read this file, `CLAUDE.local.md` and Claude Code's auto memory for the repo on every routed call. `claude.skip_project_context` (on by default) keeps all three out by passing `--setting-sources user` and setting `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. `~/.claude/CLAUDE.md` still loads.
 - **Tests must never reach a real `claude`:** a dev machine has one installed, and the runner looks in the usual install folders when the command isn't on PATH. A test that makes the CLI unfindable has to patch `install_locations` as well, or it makes a real call.
 - **Console CSS:** the Console fills the window on desktop (`.main.main-fill`). The grid needs `grid-template-rows: minmax(0, 1fr)`, or the thread grows instead of scrolling.
-- **A second instance needs its own config:** never start one on the default `config.yaml` while testing. It would share `data/` and the Qdrant collection, where point ids are request ids, so a fresh database overwrites real vectors. Point `SWITCHBOARD_CONFIG` at a copy with another `server.port` and either `index.enabled: false` or another `index.qdrant.collection`. To keep test prompts off Claude and the GPU, leave only a local model in that copy and aim `ollama.base_url` at a stub.
+- **A second instance needs its own config:** never start one on the default `config.yaml` while testing. It would share `data/` and the Qdrant collection, where point ids are request ids, so a fresh database overwrites real vectors. Point `SWITCHBOARD_CONFIG` at a copy with another `server.port` and either `index.enabled: false` or another `index.qdrant.collection`. To keep test prompts off Claude and the GPU, leave only a local model in that copy and aim `ollama.base_url` at a stub. It still shares this machine's credential store, so set `SWITCHBOARD_NO_CREDENTIAL_STORE=1` for it, or it signs in as the owner and builds a brief from real mail and coursework.
 - **The app has no console:** under `pythonw`, `sys.stdout` and `sys.stderr` are None, so `print` does nothing and a traceback goes nowhere. `desktop.setup_logging` sends logging and stray output to `data/logs/switchboard.log`, and anything that stops the app has to end in `desktop.alert`, which is a dialog there.
 - **GUI imports stay inside functions in `desktop.py`:** CI installs `requirements.txt` only. A module-level import of `webview`, `pystray` or `PIL` breaks the suite everywhere, and a test checks for it. The window and the tray icon are faked in tests, so what only a display can show (`run_gui` and the Windows helpers under it) has to be checked by hand.
 - **Closing is not quitting:** the X button hides the window and the server runs on until Quit in the tray menu. On Windows only a close the user asked for is cancelled (the X, Alt+F4, Close window on the taskbar). A plain `WM_CLOSE`, which is what `taskkill` and Task Manager send, and Windows shutting down close it for real, and cancelling those would block shutdown.
@@ -118,6 +120,9 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 - **Real brief items are private:** they are someone's mail and coursework, and an assistant that reads them sends them to Claude. Don't open the Today page, read `brief_items` or call `/api/brief` on the real instance. Work with `brief demo` on a config of its own, and use `brief status`, which prints counts only.
 - **`config.local.yaml` is looked for next to the config in use:** so a second instance on its own config never picks up the real one. The launchers read the Qdrant address from `config.yaml` alone, and an override of it in the local file isn't seen by them.
 - **The brief command must not find the real server in a test:** it asks a running Switchboard to do the work when one answers on the configured port, which is 8787 in the test config too. Patch `brief_cli.Server.find`, as the `no_server` fixture does.
+- **Tests get an empty credential store:** an autouse fixture in `conftest.py` puts a fake in place of `credentials._store` for every test and clears `SWITCHBOARD_` secrets from the environment. Without it, a test on a machine with a saved feed link would fetch the real feed.
+- **The Today page shows what a source still lists:** `brief_sources` records when each source last delivered, and an open item it didn't list then is hidden, not deleted. That is how coursework drops off after its due date. The comparison is by timestamp, so a test with a fixed clock has to move it forward between two builds.
+- **The feed reader hasn't met a real Canvas feed yet:** it assumes an assignment's UID contains `assignment`, that a title ends in `[course]` and that the event's URL points back at Canvas. `brief connect canvas` prints the feed's shape, with no titles and no link in it. Ask the owner for that output before changing the reader, and never fetch the feed yourself.
 
 ## Next steps
 
@@ -126,7 +131,7 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 A Today page, built once a day, that lists what needs doing: mail that needs a reply, coursework that is due, and a first pass at what a model can draft and what needs a person. It is built in five steps, one PR each.
 
 1. **Foundations (done).** The `brief:` config section, the `config.local.yaml` overlay, `credentials.py`, the `brief_runs` and `brief_items` tables, a build with no sources yet, the API, the `brief` command and the Today page.
-2. **Coursework.** `brief connect canvas` and a parser for the Canvas calendar feed.
+2. **Coursework (done).** `brief connect canvas`, a reader for the Canvas calendar feed, and a list that only shows what a source still lists.
 3. **Mail.** `brief connect outlook`, Microsoft Graph, an answered-thread check and triage by the local model.
 4. **Draft on click.** A Draft button that writes with the local model.
 5. **Schedule and notify.** A loop in the server that builds once a day, a notification when it is ready, a build on first open and a start-with-Windows shortcut.
@@ -135,7 +140,7 @@ Decisions already made:
 
 - **Mail is Outlook, read through Microsoft Graph** with the `Mail.Read` scope, which can't send or change anything. Sign-in is the device code flow on the `consumers` tenant, with the owner's own app registration. Its client id goes in `config.local.yaml` and the refresh token in the credential store. Registering an app needs a directory, which a personal account may have to create first.
 - **Triage reads the sender, the subject and `bodyPreview`,** the first 255 characters. The full body is fetched only when a draft is asked for.
-- **Coursework is the Canvas calendar feed,** because API tokens aren't available. It gives due dates and no submission status, so coursework is ticked off by hand. The feed address works like a password and goes in the credential store. An assignment due at 11:59 PM arrives as an all-day event.
+- **Coursework is the Canvas calendar feed,** because API tokens aren't available. It gives due dates and no submission status, so coursework is ticked off by hand and leaves the list `overdue_days` after it was due. The feed address works like a password and goes in the credential store. An assignment due at 11:59 PM arrives as an all-day event.
 - **Delegate means sort, then draft on click.** Each item is marked `you` or `model`. Nothing is drafted until asked, and nothing is ever sent.
 - **Local only.** The brief never calls Claude, not even on summaries.
 

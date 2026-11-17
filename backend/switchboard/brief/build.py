@@ -107,6 +107,7 @@ class Brief:
         try:
             found = source.collect(now, usage)
             store.save_found(source.name, found, stamp(now))
+            store.mark_collected(source.name, stamp(now))  # only after it delivered. A failure hides nothing.
             result.update(ok=True, items=len(found))
         except SourceError as e:
             result.update(ok=False, error=str(e)[:300])
@@ -128,7 +129,8 @@ class Brief:
             "day": self._clock().date().isoformat(),
             "building": self.building(),
             "run": store.latest_run(),
-            "sources": [{"name": s.name, "label": s.label, "connected": s.connected()} for s in self.sources],
+            "sources": [{"name": s.name, "label": s.label, "connected": s.connected(), "setup": s.setup}
+                        for s in self.sources],
             "items": store.list_items(self._midnight()),
         }
 

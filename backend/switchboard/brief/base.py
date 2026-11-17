@@ -55,6 +55,7 @@ class SourceError(Exception):
 class Source(Protocol):
     name: str  # goes into brief_items.source: mail | coursework
     label: str  # what the Today page calls it
+    setup: str  # the command that connects it, shown on the page while it isn't connected
 
     def connected(self) -> bool:
         """Whether the source has what it needs to collect, such as a saved sign-in."""

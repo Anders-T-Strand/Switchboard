@@ -186,9 +186,17 @@ class ChatCfg(BaseModel):
     memory: MemoryCfg = Field(default_factory=MemoryCfg)
 
 
+class BriefCourseworkCfg(BaseModel):
+    """Coursework from a Canvas calendar feed. The feed link itself is a secret and isn't a setting."""
+    lookahead_days: int = Field(7, ge=1, le=90)  # how far ahead something due is listed
+    overdue_days: int = Field(2, ge=0, le=30)  # how long it stays listed after it was due
+    include_events: bool = False  # calendar events as well as assignments
+
+
 class BriefCfg(BaseModel):
     """The morning brief: a daily list of what needs doing, shown on the Today page."""
     enabled: bool = False
+    coursework: BriefCourseworkCfg = Field(default_factory=BriefCourseworkCfg)
 
 
 class Config(BaseModel):

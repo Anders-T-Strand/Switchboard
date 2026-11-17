@@ -22,6 +22,7 @@ from switchboard.db import connect
 from switchboard.main import create_app
 
 MORNING = datetime(2026, 11, 16, 8, 0, tzinfo=timezone(timedelta(hours=-6)))
+REAL_STORE = credentials._store  # taken at import, before conftest.py puts a fake in its place for each test
 
 
 class Clock:
@@ -40,6 +41,7 @@ class FakeSource:
                  error: Exception | None = None):
         self.name = name
         self.label = name.capitalize()
+        self.setup = f"connect {name}"
         self.found = list(found or [])
         self.is_connected = connected
         self.error = error
@@ -105,30 +107,7 @@ def test_local_config_has_to_be_a_mapping(tmp_path):
         load_config(write_config(tmp_path, "- just\n- a list\n"))
 
 
-# Credentials ---------------------------------------------------------------------
-
-
-class FakeStore:
-    """Stands in for the keyring module."""
-
-    def __init__(self):
-        self.saved: dict[tuple[str, str], str] = {}
-
-    def get_password(self, service, name):
-        return self.saved.get((service, name))
-
-    def set_password(self, service, name, value):
-        self.saved[(service, name)] = value
-
-    def delete_password(self, service, name):
-        del self.saved[(service, name)]  # raises when there is nothing to delete, as keyring does
-
-
-@pytest.fixture
-def vault(monkeypatch) -> FakeStore:
-    fake = FakeStore()
-    monkeypatch.setattr(credentials, "_store", lambda: fake)
-    return fake
+# Credentials. `vault` is the fake store that conftest.py gives every test. ---------------
 
 
 def test_credentials_round_trip(vault):
@@ -158,6 +137,16 @@ def test_a_machine_without_a_store_reads_as_nothing_saved(monkeypatch):
         credentials.save("canvas_feed_url", "https://example.com/private-feed.ics")
     assert "SWITCHBOARD_CANVAS_FEED_URL" in str(failure.value)  # it says what to do instead
     assert "private-feed" not in str(failure.value)  # and never repeats the secret
+
+
+def test_the_store_can_be_turned_off_for_an_instance_that_must_not_sign_in_as_you(monkeypatch):
+    monkeypatch.setenv("SWITCHBOARD_NO_CREDENTIAL_STORE", "1")
+    monkeypatch.setattr(credentials, "_store", REAL_STORE)  # the real lookup, which the switch stops short
+    assert credentials.get("canvas_feed_url") is None
+    with pytest.raises(credentials.CredentialError):
+        credentials.save("canvas_feed_url", "https://example.com/feed.ics")
+    monkeypatch.setenv("SWITCHBOARD_CANVAS_FEED_URL", "https://example.com/made-up.ics")
+    assert credentials.get("canvas_feed_url") == "https://example.com/made-up.ics"  # the override still works
 
 
 # Building ------------------------------------------------------------------------
@@ -357,6 +346,36 @@ def test_view_puts_the_soonest_due_first_and_keeps_todays_closed_items(cfg):
     assert brief.counts()["closed"] == 0
 
 
+def test_an_item_its_source_stopped_listing_is_not_shown_and_comes_back_if_listed_again(cfg):
+    clock = Clock()
+    source = FakeSource("coursework", [found(1), found(2)])
+    brief = Brief(cfg, [source], clock=clock)
+    brief.run("manual")
+
+    clock.forward(hours=1)
+    source.found = [found(2)]  # the first one has passed, such as coursework well after its due date
+    brief.run("manual")
+    assert [i["external_id"] for i in brief.view()["items"]] == ["id-2"]
+    assert brief.counts() == {"open": 1, "open_by_source": {"coursework": 1}, "closed": 0}
+
+    clock.forward(hours=1)
+    source.found = [found(1), found(2)]  # its due date was moved, so the source lists it again
+    brief.run("manual")
+    assert [i["external_id"] for i in brief.view()["items"]] == ["id-1", "id-2"]
+
+
+def test_a_source_that_fails_hides_nothing(cfg):
+    clock = Clock()
+    source = FakeSource("coursework", [found(1), found(2)])
+    brief = Brief(cfg, [source], clock=clock)
+    brief.run("manual")
+
+    clock.forward(hours=1)
+    source.error = SourceError("offline")
+    assert brief.run("manual")["status"] == "error"
+    assert [i["external_id"] for i in brief.view()["items"]] == ["id-1", "id-2"]
+
+
 def test_an_item_goes_on_the_board_once(cfg):
     made = []
 
@@ -395,11 +414,13 @@ def client(cfg, fake_ollama):
 
 def test_api_brief_is_off_until_it_is_turned_on(client):
     view = client.get("/api/brief").json()
-    assert (view["enabled"], view["building"], view["run"], view["items"], view["sources"]) == (
-        False, False, None, [], [])
+    assert (view["enabled"], view["building"], view["run"], view["items"]) == (False, False, None, [])
+    # Every source is listed, with the command that connects it, so the page can say what to do.
+    assert view["sources"] == [{"name": "coursework", "label": "Canvas", "connected": False,
+                                "setup": "python -m switchboard brief connect canvas"}]
     refused = client.post("/api/brief/run")
     assert refused.status_code == 400 and "turned off" in refused.json()["detail"]
-    assert client.get("/api/config").json()["brief"] == {"enabled": False}
+    assert client.get("/api/config").json()["brief"]["enabled"] is False
 
 
 def test_api_builds_the_brief_and_changes_items(client):
@@ -411,7 +432,7 @@ def test_api_builds_the_brief_and_changes_items(client):
     svc.brief.wait(5)
     view = client.get("/api/brief").json()
     assert (view["building"], view["run"]["status"], view["run"]["started_by"]) == (False, "ok", "manual")
-    assert view["sources"] == [{"name": "mail", "label": "Mail", "connected": True}]
+    assert view["sources"] == [{"name": "mail", "label": "Mail", "connected": True, "setup": "connect mail"}]
     (item,) = view["items"]
     assert (item["title"], item["status"], item["task_id"]) == ("Item 1", "open", None)
 

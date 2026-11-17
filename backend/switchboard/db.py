@@ -141,6 +141,11 @@ CREATE TABLE IF NOT EXISTS brief_items (
   UNIQUE (source, external_id)
 );
 CREATE INDEX IF NOT EXISTS idx_brief_items_status ON brief_items(status);
+
+CREATE TABLE IF NOT EXISTS brief_sources (
+  name TEXT PRIMARY KEY,             -- mail | coursework
+  collected_at TEXT NOT NULL         -- when it last delivered. An open item it didn't list then is no longer current.
+);
 """
 
 # Columns added after the first release. init_db adds any that an existing database lacks.

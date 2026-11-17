@@ -3,7 +3,7 @@
     python -m switchboard                 start the server and dashboard
     python -m switchboard app             start it as a desktop app: its own window and a tray icon
     python -m switchboard ask "prompt"    send a prompt to the running server
-    python -m switchboard brief           build today's morning brief (also: brief status, brief demo)
+    python -m switchboard brief           build today's morning brief (also: brief status, brief connect canvas)
     python -m switchboard sync            read Claude Code logs once and exit
 """
 
@@ -68,9 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--json", action="store_true", help="print the full JSON response")
 
     brief = sub.add_parser("brief", help="build today's morning brief, or look at the last one")
-    brief.add_argument("action", nargs="?", default="build", choices=["build", "status", "demo"],
-                       help="build it now (the default), print the last build as counts, or fill a test "
-                            "database with made-up items")
+    brief.add_argument("action", nargs="?", default="build",
+                       choices=["build", "status", "demo", "connect", "disconnect"],
+                       help="build it now (the default), print the last build as counts, fill a test database "
+                            "with made-up items, or connect and disconnect a source")
+    brief.add_argument("target", nargs="?", help="what to connect or disconnect: canvas")
 
     sub.add_parser("sync", help="read Claude Code logs once and print a summary")
     return parser

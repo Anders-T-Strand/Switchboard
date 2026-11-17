@@ -124,15 +124,32 @@ def save_found(source: str, found: list[Found], ts: str) -> None:
             conn.execute(f"UPDATE brief_items SET {sets} WHERE id = :id", {**values, "id": known["id"]})
 
 
+def mark_collected(source: str, ts: str) -> None:
+    """Note that a source delivered at `ts`. What it listed then is what is current for it."""
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO brief_sources (name, collected_at) VALUES (?, ?)
+               ON CONFLICT(name) DO UPDATE SET collected_at = excluded.collected_at""",
+            (source, ts),
+        )
+
+
 _ITEM = """SELECT i.*, t.title AS task_title FROM brief_items i LEFT JOIN tasks t ON t.id = i.task_id"""
+
+# An open item is current while its source still lists it. One the source left out the last time it
+# delivered has passed, such as coursework well past its due date, and is no longer shown. It stays
+# in the table, so it comes back if the source lists it again, and it keeps a status the user gave it.
+# A source that has never delivered hides nothing.
+_SEEN = "LEFT JOIN brief_sources s ON s.name = i.source"
+_CURRENT = "i.status = 'open' AND (s.collected_at IS NULL OR i.last_seen_at >= s.collected_at)"
 
 
 def list_items(closed_since: str) -> list[dict]:
-    """Everything still open, then what was closed since `closed_since`, so today's progress shows.
-    Open items come soonest due first, and the ones without a date by the latest news."""
+    """What is open and current, then what was closed since `closed_since`, so today's progress
+    shows. Open items come soonest due first, and the ones without a date by the latest news."""
     with connect() as conn:
         return rows(conn.execute(
-            f"""{_ITEM} WHERE i.status = 'open' OR i.status_at >= ?
+            f"""{_ITEM} {_SEEN} WHERE ({_CURRENT}) OR (i.status != 'open' AND i.status_at >= ?)
                 ORDER BY i.status != 'open', i.due_at IS NULL, i.due_at, i.received_at DESC, i.id""",
             (closed_since,),
         ))
@@ -168,7 +185,8 @@ def counts(closed_since: str) -> dict:
     only, so it is safe to print where the items themselves are not."""
     with connect() as conn:
         by_source = {r["source"]: r["n"] for r in conn.execute(
-            "SELECT source, COUNT(*) AS n FROM brief_items WHERE status = 'open' GROUP BY source ORDER BY source"
+            f"""SELECT i.source, COUNT(*) AS n FROM brief_items i {_SEEN}
+                WHERE {_CURRENT} GROUP BY i.source ORDER BY i.source"""
         )}
         closed = conn.execute(
             "SELECT COUNT(*) FROM brief_items WHERE status != 'open' AND status_at >= ?", (closed_since,)

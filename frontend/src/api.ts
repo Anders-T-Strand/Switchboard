@@ -202,7 +202,8 @@ export type Brief = {
   day: string;
   building: boolean;
   run: BriefRun | null;
-  sources: { name: string; label: string; connected: boolean }[];
+  /** Every source there is. `setup` is the command that connects one. */
+  sources: { name: string; label: string; connected: boolean; setup: string }[];
   items: BriefItem[];
 };
 

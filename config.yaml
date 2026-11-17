@@ -154,6 +154,12 @@ index:
 # Turn it on in config.local.yaml, where everything personal about it belongs.
 brief:
   enabled: false
+  # Coursework comes from your Canvas calendar feed. The feed link is a secret, so it isn't set here.
+  # Save it with: python -m switchboard brief connect canvas
+  coursework:
+    lookahead_days: 7      # how far ahead something due is listed
+    overdue_days: 2        # how long it stays listed after it was due. The feed can't tell if you handed it in.
+    include_events: false  # also list calendar events, not only assignments
 
 # USD per million tokens (Claude API list prices, Oct 2026). Used for API-equivalent cost
 # estimates only. Your Pro plan isn't billed per token, so treat these as "what this would
