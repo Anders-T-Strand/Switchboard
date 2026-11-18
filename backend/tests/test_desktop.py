@@ -20,8 +20,9 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 
-from switchboard import desktop
+from switchboard import desktop, startup
 from switchboard.__main__ import build_parser, main
+from switchboard.config import REPO_ROOT
 from switchboard.main import create_app
 
 URL = "http://127.0.0.1:8787"
@@ -48,9 +49,41 @@ class FakeWindow:
 class FakeIcon:
     def __init__(self):
         self.notes: list[tuple] = []
+        self.menu_updates = 0
 
     def notify(self, message, title=None):
         self.notes.append((title, message))
+
+    def update_menu(self):
+        self.menu_updates += 1
+
+
+class FakeBrief:
+    """Stands in for the server's brief, for the tray's sake."""
+
+    def __init__(self, started: bool = True, error: Exception | None = None):
+        self.started_by: list[str] = []
+        self._started, self._error = started, error
+
+    def start(self, started_by: str) -> bool:
+        self.started_by.append(started_by)
+        if self._error:
+            raise self._error
+        return self._started
+
+    def view(self) -> dict:
+        return {"items": [{"status": "open", "source": "mail", "owner": "you", "title": "Secret offer"}]}
+
+
+class FakePystray:
+    """Just enough of pystray to build the menu with."""
+
+    class Menu:
+        SEPARATOR = "---"
+
+    @staticmethod
+    def MenuItem(text, action, **options):
+        return (text, action, options)
 
 
 def shell_with_window() -> desktop.Shell:
@@ -414,6 +447,108 @@ def test_notify_goes_to_the_tray_icon():
     shell.notify("3 things need you today")
     shell.notify("Reply to the recruiter", title="Morning brief")
     assert shell.icon.notes == [("Switchboard", "3 things need you today"), ("Morning brief", "Reply to the recruiter")]
+
+
+# The morning brief from the tray ---------------------------------------------------
+
+
+def test_build_the_brief_from_the_tray():
+    shell = desktop.Shell(URL, brief=FakeBrief())
+    shell.icon = FakeIcon()
+    shell.build_brief()
+    assert shell.brief.started_by == ["tray"] and shell.icon.notes == []  # the notification comes when it is done
+
+    shell.brief = FakeBrief(started=False)
+    shell.build_brief()
+    assert shell.icon.notes == [("Switchboard", "The brief is already being built.")]
+    shell.brief = FakeBrief(error=ValueError("The morning brief is turned off."))
+    shell.build_brief()
+    assert shell.icon.notes[-1] == ("Switchboard", "The morning brief is turned off.")
+
+
+def test_only_builds_nobody_is_watching_get_a_notification():
+    shell = desktop.Shell(URL, brief=FakeBrief())
+    shell.icon = FakeIcon()
+    shell.brief_built({"status": "ok", "started_by": "manual"})  # built from the page, which you are looking at
+    assert shell.icon.notes == []
+    for started_by in ("schedule", "tray"):
+        shell.brief_built({"status": "ok", "started_by": started_by})
+    assert shell.icon.notes == [("Switchboard", "Today's brief is ready: 1 needs you.")] * 2
+    assert all("Secret" not in message for _, message in shell.icon.notes)
+
+
+def test_the_tray_menu(cfg, monkeypatch):
+    def labels(items) -> list[str]:
+        return [item if item == "---" else item[0] for item in items]
+
+    monkeypatch.setattr(startup, "supported", lambda: True)
+    cfg.brief.enabled = True
+    shell = desktop.Shell(URL, brief=FakeBrief())
+    items = desktop.tray_menu(FakePystray, shell, cfg)
+    assert labels(items) == ["Open", "Open in browser", "---", "Build the brief now", "Start with Windows", "---",
+                             "Quit"]
+    assert items[0][2] == {"default": True}
+    monkeypatch.setattr(startup, "enabled", lambda: True)
+    assert items[4][2]["checked"](None) is True  # the check mark follows the shortcut
+
+    cfg.brief.enabled = False
+    monkeypatch.setattr(startup, "supported", lambda: False)
+    assert labels(desktop.tray_menu(FakePystray, shell, cfg)) == ["Open", "Open in browser", "---", "Quit"]
+
+
+def test_start_with_windows_from_the_tray(monkeypatch):
+    state = {"on": False}
+
+    def toggle() -> bool:
+        state["on"] = not state["on"]
+        return state["on"]
+
+    monkeypatch.setattr(startup, "toggle", toggle)
+    shell = desktop.Shell(URL)
+    shell.icon = FakeIcon()
+    shell.toggle_startup()
+    shell.toggle_startup()
+    assert [message for _, message in shell.icon.notes] == [
+        "Switchboard will start in the tray when you sign in.", "Switchboard won't start when you sign in anymore."]
+    assert shell.icon.menu_updates == 2
+
+    def broken() -> bool:
+        raise OSError("access denied to C:\\Users\\someone")
+
+    monkeypatch.setattr(startup, "toggle", broken)
+    shell.toggle_startup()
+    assert shell.icon.notes[-1] == ("Switchboard", "Couldn't change Start with Windows (OSError).")
+
+
+def test_start_with_windows_makes_and_removes_a_shortcut(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(startup, "supported", lambda: True)
+    ran = []
+
+    def fake_powershell(args, **options):
+        ran.append((args, options["env"]))
+        Path(options["env"]["SB_LINK"]).write_text("a shortcut", encoding="utf-8")
+
+    monkeypatch.setattr(startup.subprocess, "run", fake_powershell)
+    assert startup.enabled() is False
+    assert startup.toggle() is True
+
+    ((args, env),) = ran
+    assert args[0] == "powershell" and "CreateShortcut($env:SB_LINK)" in args[-1]
+    assert Path(env["SB_LINK"]) == startup.startup_folder() / "Switchboard.lnk"
+    assert startup.startup_folder() == tmp_path / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    assert env["SB_TARGET"].endswith("powershell.exe")
+    assert "-WindowStyle Hidden" in env["SB_ARGS"] and env["SB_ARGS"].endswith('start.ps1" app --hidden')
+    assert env["SB_DIR"] == str(REPO_ROOT) and env["SB_ICON"].endswith("switchboard.ico,0")
+    assert startup.toggle() is False
+    assert not startup.shortcut_path().exists()
+
+
+def test_start_with_windows_is_for_windows_only(monkeypatch):
+    monkeypatch.setattr(startup, "supported", lambda: False)
+    assert startup.enabled() is False
+    with pytest.raises(OSError, match="only set up for Windows"):
+        startup.enable()
 
 
 # The command ---------------------------------------------------------------------

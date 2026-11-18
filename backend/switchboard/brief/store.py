@@ -60,6 +60,12 @@ def get_run(run_id: int) -> dict | None:
         return _run(conn.execute("SELECT * FROM brief_runs WHERE id = ?", (run_id,)).fetchone())
 
 
+def runs_since(ts: str) -> list[dict]:
+    """Runs started at or after `ts`, oldest first."""
+    with connect() as conn:
+        return [_run(r) for r in conn.execute("SELECT * FROM brief_runs WHERE started_at >= ? ORDER BY id", (ts,))]
+
+
 def latest_run() -> dict | None:
     with connect() as conn:
         return _run(conn.execute("SELECT * FROM brief_runs ORDER BY id DESC LIMIT 1").fetchone())

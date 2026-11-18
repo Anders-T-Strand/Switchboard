@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from ..config import Config
 from .base import Found, Source, SourceError, Usage, stamp
-from .build import OFF, Brief, Busy
+from .build import OFF, Brief, Busy, ready_message
 from .store import ItemNotFound
 
 __all__ = ["OFF", "Brief", "Busy", "Found", "ItemNotFound", "Source", "SourceError", "Usage", "load_sources",
-           "stamp"]
+           "ready_message", "stamp"]
 
 
 def load_sources(cfg: Config, ollama=None) -> list[Source]:

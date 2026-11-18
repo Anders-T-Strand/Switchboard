@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import date
 
@@ -13,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import claude_logs, stats
-from .brief import ItemNotFound, SourceError
+from .brief import Busy, ItemNotFound, SourceError
 from .config import REPO_ROOT, Config, get_config
 from .db import init_db
 from .service import NotFound, Service
@@ -83,6 +84,38 @@ def _index_loop(index, interval: int, stop: threading.Event) -> None:
         index.wake.clear()
 
 
+BRIEF_TICK_S = 60  # how often the schedule looks at the clock
+OLLAMA_WAIT_S = 15 * 60  # just after startup, how long a due build waits for Ollama, which may still be starting
+
+
+def brief_tick(svc: Service, started: float, now: float | None = None) -> bool:
+    """Build the day's brief if it's due. Returns whether a build ran.
+
+    Started at sign-in, Switchboard can come up before Ollama does, and mail would then go unsorted.
+    So in its first minutes a due build waits for Ollama to answer."""
+    if not svc.brief.due():
+        return False
+    now = time.monotonic() if now is None else now
+    if svc.ollama.version() is None and now - started < OLLAMA_WAIT_S:
+        return False
+    try:
+        svc.brief.run("schedule")
+    except Busy:
+        return False
+    return True
+
+
+def _brief_loop(svc: Service, stop: threading.Event) -> None:
+    """The morning build: once a day after brief.build_after, for as long as Switchboard runs."""
+    started = time.monotonic()
+    while not stop.is_set():
+        try:
+            brief_tick(svc, started)
+        except Exception:
+            log.exception("the scheduled brief failed")
+        stop.wait(BRIEF_TICK_S)
+
+
 def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> FastAPI:
     cfg = cfg or get_config()
     init_db(cfg.db_path)
@@ -98,6 +131,9 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
             if svc.index is not None:
                 threads.append(threading.Thread(target=_index_loop, args=(svc.index, cfg.index.interval_s, stop),
                                                 daemon=True, name="indexer"))
+            if cfg.brief.enabled:
+                threads.append(threading.Thread(target=_brief_loop, args=(svc, stop), daemon=True,
+                                                name="brief-schedule"))
             for t in threads:
                 t.start()
         yield

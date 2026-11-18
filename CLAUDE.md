@@ -90,7 +90,8 @@ backend/switchboard/
   db.py            SQLite schema (WAL) and column migrations (ADDED_COLUMNS)
   config.py        pydantic models for config.yaml, with cross-reference validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
-  desktop.py       the app window: uvicorn in a thread, pywebview window, pystray tray icon, one copy per port, log file
+  desktop.py       the app window: uvicorn in a thread, pywebview window, pystray tray icon and menu, notifications, one copy per port, log file
+  startup.py       Start with Windows: a Startup folder shortcut that opens the app hidden in the tray
   brief/           the morning brief: base.py (what a source hands in), store.py (its tables), build.py, triage.py (sorts mail
                    with a local model), drafts.py (writes replies with it), demo.py, cli.py
     sources/       outlook.py (Microsoft sign-in and Graph), ical.py (reads a calendar feed), canvas_feed.py (coursework)
@@ -133,20 +134,21 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 - **Drafts read the whole conversation, once:** `Mailbox.thread` lists it by `conversationId` across folders and asks for `uniqueBody` as plain text, so each message comes without the ones it quotes. Yours are the ones whose `parentFolderId` is Sent Items. `drafts.prompt` keeps the message being answered and everything after it, then as much older text as fits in `THREAD` characters. A draft is cleared when a newer message arrives in its conversation.
 - **The fake Ollama drafts too:** a request whose schema has a `draft` field gets a made-up reply. `[LINKY]` in the thread adds links, `[BADJSON]` and `[EMPTY]` give answers that can't be used.
 - **A build and a draft renew the sign-in under one lock:** `outlook._sign_in`, so the newest refresh token is the one that gets saved.
+- **YAML reads an unquoted `6:30` as the number 390** (base 60). `brief.build_after` takes such a number back to the time it was meant as, and the config writes it in quotes anyway. Note that `06:30` with its leading zero stays a string.
 - **Something already handled is never stored:** a conversation answered before any build listed it is skipped by `save_found`, so an old reply doesn't turn up under Closed today. An item that was listed and then handled closes at the time of the reply.
 - **What a real Canvas feed looks like:** checked against one through `brief connect canvas`, which prints the feed's shape with no titles and no link in it. Every UID is `event-assignment-<n>`, every title ends in `[course]` and every URL points back at the same Canvas, which are the three things the reader relies on. Dates come both as all-day dates and with a time. The events also carry `DTEND`, `DTSTAMP`, `SEQUENCE`, `CLASS` and an HTML description in `X-ALT-DESC`, and the reader keeps none of them. To check a change against the real feed, ask the owner to run `brief connect canvas` again and paste what it prints. Never fetch the feed yourself.
 
 ## Next steps
 
-### 1. Morning brief (current)
+### 1. Morning brief (done)
 
-A Today page, built once a day, that lists what needs doing: mail that needs a reply, coursework that is due, and a first pass at what a model can draft and what needs a person. It is built in five steps, one PR each.
+A Today page, built once a day, that lists what needs doing: mail that needs a reply, coursework that is due, and a first pass at what a model can draft and what needs a person. It was built in five steps, one PR each. All five are merged.
 
 1. **Foundations (done).** The `brief:` config section, the `config.local.yaml` overlay, `credentials.py`, the `brief_runs` and `brief_items` tables, a build with no sources yet, the API, the `brief` command and the Today page.
 2. **Coursework (done).** `brief connect canvas`, a reader for the Canvas calendar feed, and a list that only shows what a source still lists.
 3. **Mail (done).** `brief connect outlook`, Microsoft Graph, an answered-thread check and triage by the local model. Checked against a real Outlook.com mailbox through the shape `connect` prints: every `webLink` is on an allowed Outlook host, every message has a preview and Focused Inbox marks every message. The first limit of 60 messages proved too low for a real inbox, so it is 200 now. A second check confirmed reply detection: `connect` prints how much was sent in the same days, and those replies closed their conversations. The first real build ran on the owner's machine and looked right to them.
 4. **Draft on click (done).** A Draft button on mail cards that writes a reply with the local model, from the conversation and `brief.mail.writing_notes`. Not yet tried on real mail.
-5. **Schedule and notify.** A loop in the server that builds once a day, a notification when it is ready, a build on first open and a start-with-Windows shortcut.
+5. **Schedule and notify (done).** `_brief_loop` in the server builds once a day after `brief.build_after`, or as soon as it starts after that, and `Brief.due` decides when. The desktop app notifies from the tray when a build nobody watched is done, and its tray menu has Build the brief now and Start with Windows. Today is the start page while the brief is on.
 
 Decisions already made:
 
@@ -161,8 +163,9 @@ Rules that follow from the code and from the repo being public:
 - **Raw mail and course text stay local.** A source calls `OllamaClient.chat` itself, with the model's own options so Ollama doesn't reload it. It never goes through the router, where a rule or `fallback_order` can reach Claude.
 - **Mail and course text are untrusted input.** They can contain instructions aimed at the model. Put them in a delimited block, ask for a fixed JSON schema, show what comes back as plain text, and build links from ids, never from a mail body.
 - **Personal settings go in `config.local.yaml` and secrets through `credentials.py`.** Neither goes in the tracked `config.yaml`, and no secret goes under `data/`, which is the parent of the folder Claude runs in.
-- **Schedule:** Switchboard only runs while it's open. The plan is a loop in the server that builds after a set time when today has no run, plus a build on the first open of the day. `python -m switchboard brief` already builds on demand, through the running server when there is one and in this process when there isn't.
-- **What the app window already has for it:** `python -m switchboard app --hidden` starts in the tray with no window, which is what a login item should run. `Shell.notify` in `desktop.py` shows a notification from the tray icon. Neither is wired to anything yet. `notify` has only run against a fake icon, so look at what Windows puts in a real notification's header. It may say Python, as the taskbar did before the window got its relaunch properties, and then `APP_ID` needs registering with Windows.
+- **Schedule:** Switchboard only builds while it runs, so Start with Windows is what makes it daily. A build counts for the day when it started after `build_after` and went through, fully or in part. A failed one is retried after `RETRY` (30 minutes). For its first `OLLAMA_WAIT_S` (15 minutes) after startup, a due build waits for Ollama, which may still be starting at sign-in. `python -m switchboard brief` builds on demand, through the running server when there is one.
+- **Notifications are wired but not yet seen on a real desktop:** `Brief.on_built` calls `Shell.brief_built`, which notifies for builds started by the schedule or the tray, with `ready_message` (counts only). pystray's balloon has only run against a fake icon, so look at what Windows puts in the header. It may say Python, as the taskbar did before the window got its relaunch properties, and then `APP_ID` needs registering with Windows.
+- **Start with Windows** is a shortcut in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` that runs `start.ps1 app --hidden` in a hidden PowerShell, made through `WScript.Shell` with every value passed in the environment. `startup.py` does it, from the tray's check box only.
 
 ### 2. Give the Console's models some context
 

@@ -16,7 +16,7 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
 - **Its own window on Windows.** `switchboard.cmd` opens the dashboard as a desktop app, with a tray icon and its own name and icon on the taskbar, and no terminal left open. It is the same local server in one Python process, with no Electron and no bundled exe.
-- **Tested and checked.** 248 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
+- **Tested and checked.** 266 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
 
 ## Architecture
 
@@ -120,7 +120,14 @@ The embedding model is small (about 640 MB) and stays loaded next to your chat m
 
 ## Today
 
-The Today page is a morning brief: a list, built once a day, of what needs doing. Mail that needs a reply comes from an Outlook inbox, sorted by a local model into what only you can answer and what a model could draft. Coursework comes from a Canvas calendar feed. The page also shows your open tasks.
+The Today page is a morning brief: a list, built once a day, of what needs doing. Mail that needs a reply comes from an Outlook inbox, sorted by a local model into what only you can answer and what a model could draft. Coursework comes from a Canvas calendar feed. The page also shows your open tasks, and once the brief is on it is the page Switchboard opens on.
+
+It builds itself every morning:
+
+- **At a set time, or as soon as Switchboard starts after it.** After `brief.build_after`, 06:30 by default, the server builds the day's brief once. Started later, because the PC was off, it builds right away. A build that failed is tried again half an hour later.
+- **It gives Ollama a moment.** Started with Windows, Switchboard can be up before Ollama is, and mail would go unsorted. So in its first 15 minutes a due build waits for Ollama to answer.
+- **A notification says when it's ready,** from the tray icon, with counts and nothing else: "Today's brief is ready: 2 need you, 1 a model can draft and 3 coursework." The tray menu has Build the brief now as well.
+- **Start with Windows,** a check box in the tray menu, puts a shortcut in your Startup folder that starts Switchboard hidden in the tray. The brief is then waiting in the morning without you opening anything.
 
 ```powershell
 python -m switchboard brief connect outlook  # sign in to Microsoft with a code
@@ -269,7 +276,7 @@ Settings of your own that shouldn't be published go in `config.local.yaml`, next
 | `routing.fallback_order` | What to try when the chosen model fails. |
 | `claude` | CLI path, timeout, tools to block, `use_subscription`, which strips `ANTHROPIC_API_KEY` from the `claude -p` environment so routed calls use your plan instead of API billing, and `skip_project_context`, which keeps this repo's `CLAUDE.md` files and Claude Code's auto memory out of routed calls. |
 | `pricing` | Per-million-token prices used for the API-rate estimates. |
-| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. `coursework` sets how far ahead an assignment is listed (`lookahead_days`) and how long after its due date (`overdue_days`). `mail` takes your app registration's `client_id`, how far back to look (`lookback_days`), how many messages to read (`max_messages`) and a few lines on how you write, for drafts (`writing_notes`). |
+| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. `build_after` is the local time it is built from, in quotes, such as `"06:30"`. `coursework` sets how far ahead an assignment is listed (`lookahead_days`) and how long after its due date (`overdue_days`). `mail` takes your app registration's `client_id`, how far back to look (`lookback_days`), how many messages to read (`max_messages`) and a few lines on how you write, for drafts (`writing_notes`). |
 | `server.host` | Set to your Tailscale IP or `0.0.0.0` to open the dashboard from other devices. There is no login, so only expose it on a private network. |
 
 To send moderate coding work to Claude as well, uncomment the `code` rule in `config.yaml`. If Opus isn't available on your plan in Claude Code, complexity 5 prompts fall back to Sonnet on their own, or point the `expert` rule at `claude-sonnet`.
@@ -305,7 +312,8 @@ backend/switchboard/
   db.py            SQLite schema and migrations
   config.py        config.yaml models and validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
-  desktop.py       the app window: server thread, tray icon, one copy per port, log file
+  desktop.py       the app window: server thread, tray icon and its menu, notifications, one copy per port, log file
+  startup.py       Start with Windows: a shortcut in the Startup folder that opens the app in the tray
   brief/           the morning brief: its sources (Outlook through Microsoft Graph, a Canvas calendar feed), mail triage and drafts by a local model, its own tables, the build and the brief command
   credentials.py   secrets in the operating system's credential store, through keyring, in parts when they are long
 backend/tests/     pytest suite
@@ -317,4 +325,3 @@ frontend/src/      React + TypeScript dashboard
 - Train a router on the rated turns (the Qdrant vectors make good features) and compare it against the classifier and the rating-based ladder
 - Stream answers as they're generated
 - Re-run a turn on a different model to compare answers
-- Start with Windows, in the tray, and send notifications from there. `app --hidden` and the tray icon are in place for both

@@ -13,8 +13,9 @@ pywebview and pystray are imported inside the functions that use them, the way u
 qdrant_client are elsewhere. This module and its tests need neither a display nor the packages in
 requirements-desktop.txt.
 
-Two things are left for later and have a place here. Starting with Windows: `--hidden` starts in the
-tray with no window, which is what a login item should run. Notifications: `Shell.notify`.
+The tray menu can also build the morning brief now, and turn on starting with Windows, which runs
+the app with `--hidden`: in the tray, with no window (startup.py). A build nobody is watching, from
+the schedule or the tray, ends in a notification from the tray icon, with counts and nothing else.
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ from collections.abc import Callable, Iterable
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from . import startup
+from .brief import ready_message
 from .config import REPO_ROOT, Config, get_config
 
 log = logging.getLogger("switchboard.desktop")
@@ -314,11 +317,12 @@ class Shell:
     """The window and the tray icon. `window` is a pywebview window and `icon` a pystray icon. Both
     are filled in once they exist, and the tests put fakes there."""
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, brief=None):
         self.url = url
         self.window = None
         self.icon = None
         self.quitting = False
+        self.brief = brief  # the server's morning brief, or None
 
     def on_closing(self, by_user: bool = True) -> bool:
         """The window is about to close. Returns False to cancel that.
@@ -351,10 +355,41 @@ class Shell:
             self.window.destroy()
 
     def notify(self, message: str, title: str = APP_NAME) -> None:
-        """Show a desktop notification from the tray icon. Nothing calls this yet. It is where a
-        later feature, such as the morning brief, announces itself."""
+        """Show a desktop notification from the tray icon. A build that ends before the icon exists,
+        in the first second or two, goes without one."""
         if self.icon is not None:
             self.icon.notify(message, title)
+
+    def build_brief(self) -> None:
+        """Tray menu: build the brief now. A notification says when it is ready."""
+        if self.brief is None:
+            return
+        try:
+            started = self.brief.start("tray")
+        except ValueError as e:  # the brief is turned off
+            self.notify(str(e))
+            return
+        if not started:
+            self.notify("The brief is already being built.")
+
+    def brief_built(self, run: dict) -> None:
+        """Called after every build. One nobody is watching, from the schedule or the tray, gets a
+        notification. It holds counts only: what is in the brief stays in Switchboard."""
+        if self.brief is not None and run["started_by"] in ("schedule", "tray"):
+            self.notify(ready_message(run, self.brief.view()))
+
+    def toggle_startup(self) -> None:
+        """Tray menu: start in the tray when you sign in to Windows, or stop doing that."""
+        try:
+            on = startup.toggle()
+        except Exception as e:
+            log.error("changing Start with Windows failed: %s", type(e).__name__)
+            self.notify(f"Couldn't change Start with Windows ({type(e).__name__}).")
+            return
+        self.notify("Switchboard will start in the tray when you sign in." if on
+                    else "Switchboard won't start when you sign in anymore.")
+        if self.icon is not None and hasattr(self.icon, "update_menu"):
+            self.icon.update_menu()  # so the check mark follows
 
 
 def _hwnd(window) -> int | None:
@@ -500,6 +535,23 @@ def _tray_image():
         return Image.new("RGB", (64, 64), PAGE_COLOR)  # no icon file. The tray still needs a picture.
 
 
+def tray_menu(pystray, shell: Shell, cfg: Config) -> list:
+    """The tray icon's menu. `pystray` is passed in, so a test can hand over a stand-in for it."""
+    items = [
+        pystray.MenuItem("Open", shell.show, default=True),  # default: a click on the icon does this
+        pystray.MenuItem("Open in browser", shell.open_in_browser),
+    ]
+    more = []
+    if cfg.brief.enabled and shell.brief is not None:
+        more.append(pystray.MenuItem("Build the brief now", shell.build_brief))
+    if startup.supported():
+        more.append(pystray.MenuItem("Start with Windows", shell.toggle_startup,
+                                     checked=lambda item: startup.enabled()))
+    if more:
+        items += [pystray.Menu.SEPARATOR, *more]
+    return items + [pystray.Menu.SEPARATOR, pystray.MenuItem("Quit", shell.quit)]
+
+
 def run_gui(cfg: Config, shell: Shell, *, hidden: bool = False, devtools: bool = False) -> None:
     """Create the window and the tray icon, then block until Quit. Main thread only."""
     import pystray
@@ -525,12 +577,7 @@ def run_gui(cfg: Config, shell: Shell, *, hidden: bool = False, devtools: bool =
         window.events.closing += shell.on_closing
     window.events.shown += lambda: log.info("window ready (%s)", webview.renderer)
 
-    icon = pystray.Icon("switchboard", _tray_image(), APP_NAME, menu=pystray.Menu(
-        pystray.MenuItem("Open", shell.show, default=True),  # default: a click on the icon does this
-        pystray.MenuItem("Open in browser", shell.open_in_browser),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("Quit", shell.quit),
-    ))
+    icon = pystray.Icon("switchboard", _tray_image(), APP_NAME, menu=pystray.Menu(*tray_menu(pystray, shell, cfg)))
     shell.icon = icon
     tray_ready = threading.Event()
 
@@ -582,6 +629,8 @@ def _run(cfg: Config, args) -> int:
 
         shell = Shell(url)
         app = create_app(cfg)
+        shell.brief = app.state.service.brief
+        shell.brief.on_built = shell.brief_built  # the schedule's builds announce themselves from the tray
         app.add_middleware(ShowRoute, show=shell.show)
         server = ServerThread(app, sock, host, port)
     except Exception:

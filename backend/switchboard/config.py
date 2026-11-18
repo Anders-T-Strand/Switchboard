@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
+from datetime import time as dt_time
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -211,8 +213,28 @@ class BriefMailCfg(BaseModel):
 class BriefCfg(BaseModel):
     """The morning brief: a daily list of what needs doing, shown on the Today page."""
     enabled: bool = False
+    # Local time from which the day's brief is built, while Switchboard runs. Started later than
+    # that, it builds as soon as it starts.
+    build_after: str = "06:30"
     coursework: BriefCourseworkCfg = Field(default_factory=BriefCourseworkCfg)
     mail: BriefMailCfg = Field(default_factory=BriefMailCfg)
+
+    @field_validator("build_after", mode="before")
+    @classmethod
+    def _clock_time(cls, value):
+        # YAML reads an unquoted 06:30 as the number 390, minutes in base 60. Take that as meant.
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 24 * 60:
+            value = f"{value // 60:02d}:{value % 60:02d}"
+        text = str(value).strip()
+        if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", text):
+            raise ValueError("brief.build_after has to be a time of day, such as \"06:30\"")
+        hours, minutes = text.split(":")
+        return f"{int(hours):02d}:{minutes}"
+
+    @property
+    def build_time(self) -> dt_time:
+        hours, minutes = self.build_after.split(":")
+        return dt_time(int(hours), int(minutes))
 
 
 class Config(BaseModel):
