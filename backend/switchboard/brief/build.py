@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ..config import Config
 from . import store
@@ -14,6 +14,30 @@ from .base import Source, SourceError, Usage, stamp
 log = logging.getLogger("switchboard.brief")
 
 OFF = "The morning brief is turned off. Set brief.enabled to true in config.local.yaml."
+RETRY = timedelta(minutes=30)  # how long the schedule waits after a failed build before it tries again
+
+
+def ready_message(run: dict, view: dict) -> str:
+    """What a notification says about a finished build. Counts only, nothing from the items."""
+    if run["status"] == "error":
+        return "Today's brief couldn't be built. Open Switchboard to see why."
+    open_items = [i for i in view["items"] if i["status"] == "open"]
+    coursework = sum(1 for i in open_items if i["source"] == "coursework")
+    draftable = sum(1 for i in open_items if i["source"] != "coursework" and i["owner"] == "model")
+    yours = len(open_items) - coursework - draftable
+    parts = [text for n, text in (
+        (yours, f"{yours} {'needs' if yours == 1 else 'need'} you"),
+        (draftable, f"{draftable} a model can draft"),
+        (coursework, f"{coursework} coursework"),
+    ) if n]
+    if not parts:
+        message = "Today's brief is ready. Nothing needs you right now."
+    else:
+        listed = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+        message = f"Today's brief is ready: {listed}."
+    if run["status"] == "partial":
+        message += " Part of it couldn't be read, so open Switchboard to see which."
+    return message
 
 
 class Busy(RuntimeError):
@@ -33,6 +57,22 @@ class Brief:
         self._clock = clock or (lambda: datetime.now().astimezone())
         self._lock = threading.Lock()  # held for as long as a build is going
         self._thread: threading.Thread | None = None
+        # Called with the finished run after every build. The desktop app sets it to show a notification.
+        self.on_built: Callable[[dict], None] | None = None
+
+    # Schedule ----------------------------------------------------------------------
+
+    def due(self) -> bool:
+        """Whether the day's build should run now. It is due once it's past brief.build_after, until a
+        build has gone through since then. After a failed one it waits RETRY before trying again."""
+        now = self._clock()
+        after = datetime.combine(now.date(), self.cfg.brief.build_time, tzinfo=now.tzinfo)
+        if not self.cfg.brief.enabled or now < after or self.building():
+            return False
+        runs = store.runs_since(stamp(after))
+        if any(r["status"] in ("ok", "partial") for r in runs):
+            return False
+        return not runs or runs[-1]["started_at"] < stamp(now - RETRY)
 
     # Building ----------------------------------------------------------------------
 
@@ -95,7 +135,13 @@ class Brief:
         failed = any(r["ok"] is False for r in results)
         status = "ok" if not failed else "partial" if worked else "error"
         store.finish_run(run_id, status, results, usage, stamp(self._clock()))
-        return store.get_run(run_id)
+        run = store.get_run(run_id)
+        if self.on_built is not None:
+            try:
+                self.on_built(run)
+            except Exception:
+                log.exception("telling about the finished brief failed")
+        return run
 
     def _collect(self, source: Source, now: datetime, usage: Usage) -> dict:
         """One source's part of a build. A source that fails is reported and the others go on."""

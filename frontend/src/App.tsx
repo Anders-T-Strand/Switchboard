@@ -30,7 +30,8 @@ function readDays(): number {
 }
 
 export default function App() {
-  const [route] = useHashRoute("overview");
+  // No page in the address means the start page: Today once the morning brief is on, Overview before.
+  const [route] = useHashRoute("");
   const [days, setDaysState] = useState(readDays);
   const config = useApi(() => api.config(), []);
   const status = useApi(() => api.status(), [], 15_000);
@@ -59,7 +60,8 @@ export default function App() {
     };
   }, [config.data, status.data]);
 
-  const page = PAGES.find((p) => p.id === route) ?? PAGES.find((p) => p.id === "overview")!;
+  const start = config.data?.brief.enabled ? "today" : "overview";
+  const page = PAGES.find((p) => p.id === route) ?? PAGES.find((p) => p.id === start)!;
   const st = status.data;
   const loaded = st?.models.filter((m) => m.loaded).map((m) => m.label) ?? [];
 

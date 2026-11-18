@@ -154,6 +154,7 @@ index:
 # Turn it on in config.local.yaml, where everything personal about it belongs.
 brief:
   enabled: false
+  build_after: "06:30"     # local time the day's brief is built from, while Switchboard runs. Keep the quotes.
   # Coursework comes from your Canvas calendar feed. The feed link is a secret, so it isn't set here.
   # Save it with: python -m switchboard brief connect canvas
   coursework:
