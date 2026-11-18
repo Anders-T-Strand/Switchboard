@@ -142,6 +142,17 @@ class Brief:
     def set_status(self, item_id: int, status: str) -> dict:
         return store.set_status(item_id, status, stamp(self._clock()))
 
+    def draft(self, item_id: int) -> dict:
+        """Ask the item's source for a reply and keep it on the item. Returns the item, draft and all.
+        Raises ValueError for an item its source can't draft, and SourceError when drafting failed."""
+        item = store.get_item(item_id)
+        source = next((s for s in self.sources if s.name == item["source"]), None)
+        if source is None or not hasattr(source, "draft"):
+            raise ValueError("Only mail can be drafted.")
+        text, model_key = source.draft(item, self._clock())
+        store.save_draft(item_id, text, model_key, stamp(self._clock()))
+        return store.get_item(item_id)
+
     def make_task(self, item_id: int) -> dict:
         """Put the item on the Tasks board, once. Returns the item, which then names its task."""
         item = store.get_item(item_id)

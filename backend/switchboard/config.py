@@ -203,6 +203,9 @@ class BriefMailCfg(BaseModel):
     # only once, so a high number costs time on the first build and little after that.
     max_messages: int = Field(200, ge=1, le=1000)
     model: str | None = None  # the local model that sorts mail. Leave it out to use whichever is loaded.
+    # A few lines on how you write, for drafts: how you greet people and sign off, how formal you are.
+    # Personal, so it belongs in config.local.yaml.
+    writing_notes: str | None = Field(None, max_length=2000)
 
 
 class BriefCfg(BaseModel):

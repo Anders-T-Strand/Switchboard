@@ -71,5 +71,22 @@ def _coursework(now: datetime) -> list[Found]:
     ]
 
 
+DRAFT = ("Hi Dana,\n\nThanks for reaching out. I'd be glad to talk next week. Would any of these work for "
+         "a 45 minute call?\n\n[two or three times that work for you]\n\nBest,\n[your name]")
+
+
+def add_draft(ts: str) -> None:
+    """Put a made-up draft on the made-up interview mail, so the page shows what a draft looks like."""
+    from ..db import connect
+    from . import store
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id FROM brief_items WHERE source = 'mail' AND external_id = 'demo-mail-1'"
+        ).fetchone()
+    if row:
+        store.save_draft(row["id"], DRAFT, "demo", ts)
+
+
 def sources() -> list[DemoSource]:
     return [DemoSource("mail", "Mail (made up)", _mail), DemoSource("coursework", "Coursework (made up)", _coursework)]

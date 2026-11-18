@@ -98,7 +98,7 @@ def save_found(source: str, found: list[Found], ts: str) -> None:
                 values["link"] = None
 
             known = conn.execute(
-                "SELECT id, status, status_at FROM brief_items WHERE source = ? AND external_id = ?",
+                "SELECT id, status, status_at, received_at FROM brief_items WHERE source = ? AND external_id = ?",
                 (source, f.external_id),
             ).fetchone()
             if known is None:
@@ -122,6 +122,8 @@ def save_found(source: str, found: list[Found], ts: str) -> None:
                 if values[judged] is None:
                     values.pop(judged)  # not judged this time, so what an earlier build said stays
             values.update(status=status, status_at=status_at, last_seen_at=ts)
+            if f.received_at and known["received_at"] and f.received_at > known["received_at"]:
+                values.update(draft=None, draft_model=None, drafted_at=None)  # it answered an older message
             sets = ", ".join(f"{k} = :{k}" for k in values)
             conn.execute(f"UPDATE brief_items SET {sets} WHERE id = :id", {**values, "id": known["id"]})
 
@@ -212,6 +214,16 @@ def set_status(item_id: int, status: str, ts: str) -> dict:
     if changed == 0:
         raise ItemNotFound(f"brief item {item_id} not found")
     return get_item(item_id)
+
+
+def save_draft(item_id: int, text: str, model_key: str, ts: str) -> None:
+    with connect() as conn:
+        changed = conn.execute(
+            "UPDATE brief_items SET draft = ?, draft_model = ?, drafted_at = ? WHERE id = ?",
+            (text, model_key, ts, item_id),
+        ).rowcount
+    if changed == 0:
+        raise ItemNotFound(f"brief item {item_id} not found")
 
 
 def link_task(item_id: int, task_id: int) -> None:

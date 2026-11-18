@@ -171,6 +171,10 @@ export type BriefItem = {
   task_id: number | null;
   task_title: string | null;
   first_seen_at: string;
+  /** A reply the local model wrote when asked. Nothing is ever sent. */
+  draft: string | null;
+  draft_model: string | null;
+  drafted_at: string | null;
 };
 
 export type BriefSourceResult = {
@@ -440,4 +444,5 @@ export const api = {
   setBriefItem: (id: number, status: BriefItemStatus) =>
     request<BriefItem>(`/api/brief/items/${id}`, { method: "PATCH", body: json({ status }) }),
   briefItemTask: (id: number) => request<BriefItem>(`/api/brief/items/${id}/task`, { method: "POST" }),
+  draftBriefItem: (id: number) => request<BriefItem>(`/api/brief/items/${id}/draft`, { method: "POST" }),
 };
