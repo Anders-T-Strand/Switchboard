@@ -515,31 +515,53 @@ def command(action: str, target: str | None = None):
     return build_parser().parse_args(["brief", action] + ([target] if target else []))
 
 
+class Desk:
+    """The keyboard, the clipboard and the browser, faked so a test touches none of them. `events`
+    is what happened to them, in order."""
+
+    def __init__(self):
+        self.events: list[tuple[str, str]] = []
+        self.keyboard: Exception | None = None  # what pressing a key raises, instead of Enter
+
+    def enter(self, prompt: str = "") -> str:
+        self.events.append(("enter", prompt))
+        if self.keyboard:
+            raise self.keyboard
+        return ""
+
+
 @pytest.fixture
-def no_browser(monkeypatch) -> list[str]:
-    opened: list[str] = []
-    monkeypatch.setattr("webbrowser.open", opened.append)
+def desk(monkeypatch) -> Desk:
+    d = Desk()
+    monkeypatch.setattr("webbrowser.open", lambda url: d.events.append(("open", url)))
+    monkeypatch.setattr("builtins.input", d.enter)
+    monkeypatch.setattr(brief_cli, "_copy_to_clipboard", lambda text: d.events.append(("clipboard", text)) or True)
     monkeypatch.setattr(outlook.time, "sleep", lambda seconds: None)
-    return opened
+    return d
 
 
-def test_connect_outlook_without_a_client_id_explains_the_app_registration(cfg, ms, no_browser, capsys):
+def test_connect_outlook_without_a_client_id_explains_the_app_registration(cfg, ms, desk, capsys):
     assert brief_cli.run(command("connect", "outlook"), cfg) == 1
     out = capsys.readouterr().out
     assert "Personal Microsoft accounts only" in out and "Allow public client flows" in out and "client_id" in out
-    assert ms.requests == [] and no_browser == []
+    assert ms.requests == [] and desk.events == []
 
 
-def test_connect_outlook_signs_in_saves_and_prints_only_counts(mail_cfg, ms, no_browser, capsys):
+def test_connect_outlook_signs_in_saves_and_prints_only_counts(mail_cfg, ms, desk, capsys):
     ms.inbox = [message(1, subject="Secret offer", name="Priya Raman", preview="[DRAFT]", hours_ago=2),
                 message(2, conv="conv-1", hours_ago=5), message(3, focus="other", flag="complete")]
     ms.sent = [reply("conv-1", 1)]
     assert brief_cli.run(command("connect", "outlook"), mail_cfg) == 0
 
     assert credentials.get(outlook.REFRESH_TOKEN) == LONG_REFRESH
-    assert no_browser == ["https://www.microsoft.com/link"]
+    # The code comes first, and the page only opens once you've pressed Enter, so it can't hide the code.
+    assert desk.events == [("clipboard", "ABCD-EFGH"),
+                           ("enter", "Press Enter to open https://www.microsoft.com/link in your browser..."),
+                           ("open", "https://www.microsoft.com/link")]
     out = capsys.readouterr().out
-    assert "Open https://www.microsoft.com/link and enter the code ABCD-EFGH." in out
+    assert "Microsoft's sign-in page will ask for a code. Your code is:\n\n    ABCD-EFGH\n" in out
+    assert "It's on the clipboard too, so you can paste it there. It works for 15 minutes." in out
+    assert "The code again: ABCD-EFGH." in out
     assert "The inbox has 3 messages from the last 14 days, in 2 conversations." in out
     assert "answered by you after their last message: 1" in out
     assert "last message flagged complete: 1" in out
@@ -550,7 +572,7 @@ def test_connect_outlook_signs_in_saves_and_prints_only_counts(mail_cfg, ms, no_
         assert private not in out
 
 
-def test_connect_outlook_reports_a_declined_sign_in_and_saves_nothing(mail_cfg, ms, no_browser, capsys):
+def test_connect_outlook_reports_a_declined_sign_in_and_saves_nothing(mail_cfg, ms, desk, capsys):
     ms.device_answers = ["authorization_declined"]
     assert brief_cli.run(command("connect", "outlook"), mail_cfg) == 1
     assert "Not connected. The sign-in was declined." in capsys.readouterr().err
@@ -562,3 +584,35 @@ def test_disconnect_outlook_removes_the_sign_in_and_its_parts(mail_cfg, vault, c
     assert brief_cli.run(command("disconnect", "outlook"), mail_cfg) == 0
     assert vault.saved == {}
     assert "Removed the Outlook sign-in from this machine." in capsys.readouterr().out
+
+
+def test_the_page_still_opens_when_nobody_is_at_the_keyboard(mail_cfg, ms, desk):
+    desk.keyboard = EOFError()
+    assert brief_cli.run(command("connect", "outlook"), mail_cfg) == 0
+    assert desk.events[-1] == ("open", "https://www.microsoft.com/link")
+
+
+def test_ctrl_c_at_the_code_stops_before_any_waiting(mail_cfg, ms, desk, capsys):
+    desk.keyboard = KeyboardInterrupt()
+    assert brief_cli.run(command("connect", "outlook"), mail_cfg) == 1
+    assert "Stopped. Nothing was saved." in capsys.readouterr().err
+    assert [r.url.path.rsplit("/", 1)[-1] for r in ms.requests] == ["devicecode"]  # never polled
+    assert credentials.get(outlook.REFRESH_TOKEN) is None
+
+
+def test_copy_to_clipboard_uses_the_systems_own_command(monkeypatch):
+    import subprocess
+    import sys
+
+    ran = []
+    monkeypatch.setattr(subprocess, "run", lambda command, **kw: ran.append((command, kw["input"])))
+    copied = brief_cli._copy_to_clipboard("ABCD-EFGH")
+    expected = {"win32": ["clip"], "darwin": ["pbcopy"]}.get(sys.platform)
+    assert copied is (expected is not None)
+    assert ran == ([(expected, "ABCD-EFGH")] if expected else [])
+
+    def broken(command, **kw):
+        raise OSError("no clipboard here")
+
+    monkeypatch.setattr(subprocess, "run", broken)
+    assert brief_cli._copy_to_clipboard("ABCD-EFGH") is False
