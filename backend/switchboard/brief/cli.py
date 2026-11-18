@@ -227,6 +227,43 @@ REGISTER = """Outlook needs an app registration of your own before it can sign i
 Then run this command again."""
 
 
+def _copy_to_clipboard(text: str) -> bool:
+    """Put `text` on the clipboard, where the system has a command for it. False when it couldn't."""
+    import subprocess
+
+    command = {"win32": ["clip"], "darwin": ["pbcopy"]}.get(sys.platform)
+    if command is None:
+        return False
+    try:
+        subprocess.run(command, input=text, text=True, check=True, capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+def _show_code(flow: dict, open_page) -> None:
+    """Show the code before anything else happens. The browser opens on top of this window, and a
+    code printed next to the instructions is easy to miss once it does, so the page only opens when
+    you press Enter."""
+    code, page = str(flow["user_code"]), str(flow["verification_uri"])
+    minutes = max(int(flow.get("expires_in") or 900) // 60, 1)
+    copied = _copy_to_clipboard(code)
+    print("Microsoft's sign-in page will ask for a code. Your code is:\n")
+    print(f"    {code}\n")
+    print(("It's on the clipboard too, so you can paste it there. " if copied else "")
+          + f"It works for {minutes} minutes.")
+    if page.startswith("https://"):
+        with contextlib.suppress(EOFError):  # nobody at the keyboard. Open it anyway.
+            input(f"Press Enter to open {page} in your browser...")
+        with contextlib.suppress(Exception):
+            open_page(page)
+    else:
+        print(f"Open {page} in your browser.")
+    print("On that page, enter the code, then sign in with the Microsoft account whose mail the brief should read "
+          "and let Switchboard read it.")
+    print(f"Waiting for the sign-in to finish. The code again: {code}. Press Ctrl+C to stop.")
+
+
 def _connect_outlook(cfg: Config) -> int:
     """Sign in to Outlook with a code, then save the sign-in to the credential store. What it prints
     is the mailbox's shape and nothing any message says."""
@@ -245,13 +282,8 @@ def _connect_outlook(cfg: Config) -> int:
         except SourceError as e:
             print(f"Couldn't start the sign-in. {e}", file=sys.stderr)
             return 1
-        print(f"Open {flow['verification_uri']} and enter the code {flow['user_code']}.")
-        print("Sign in with the Microsoft account whose mail the brief should read, and let Switchboard read it.")
-        if str(flow["verification_uri"]).startswith("https://"):
-            with contextlib.suppress(Exception):
-                webbrowser.open(flow["verification_uri"])
-        print("Waiting for the sign-in. Press Ctrl+C to stop.")
         try:
+            _show_code(flow, webbrowser.open)
             tokens = sign_in.wait(flow)
         except SourceError as e:
             print(f"Not connected. {e}", file=sys.stderr)

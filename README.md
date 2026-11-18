@@ -16,7 +16,7 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
 - **Its own window on Windows.** `switchboard.cmd` opens the dashboard as a desktop app, with a tray icon and its own name and icon on the taskbar, and no terminal left open. It is the same local server in one Python process, with no Electron and no bundled exe.
-- **Tested and checked.** 230 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
+- **Tested and checked.** 233 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
 
 ## Architecture
 
