@@ -16,7 +16,7 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
 - **Its own window on Windows.** `switchboard.cmd` opens the dashboard as a desktop app, with a tray icon and its own name and icon on the taskbar, and no terminal left open. It is the same local server in one Python process, with no Electron and no bundled exe.
-- **Tested and checked.** 192 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
+- **Tested and checked.** 230 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
 
 ## Architecture
 
@@ -120,13 +120,22 @@ The embedding model is small (about 640 MB) and stays loaded next to your chat m
 
 ## Today
 
-The Today page is a morning brief: a list, built once a day, of what needs doing. Coursework is in, read from a Canvas calendar feed that lists every assignment with its due date. Mail comes next. The page also shows your open tasks.
+The Today page is a morning brief: a list, built once a day, of what needs doing. Mail that needs a reply comes from an Outlook inbox, sorted by a local model into what only you can answer and what a model could draft. Coursework comes from a Canvas calendar feed. The page also shows your open tasks.
 
 ```powershell
+python -m switchboard brief connect outlook  # sign in to Microsoft with a code
 python -m switchboard brief connect canvas   # paste your calendar feed link at a hidden prompt
 python -m switchboard brief                  # build today's brief now
 python -m switchboard brief status           # the last build, as counts and nothing from the items
 ```
+
+How mail gets there:
+
+- **Read-only, through your own app registration.** Switchboard signs in to Microsoft Graph with the device code flow, as a public client with no secret, and asks only for `Mail.Read`, which can't send, delete or change anything. The sign-in is kept in the credential store and renewed on every build. `connect` walks you through the registration and prints only the mailbox's shape: how many messages and conversations, how many you've answered.
+- **Handled mail leaves the list on its own.** A conversation where you replied after its last message is done, and so is one you flagged complete. A new message in it opens it again.
+- **Sorted by a local model and nothing else.** Each new message goes to Ollama once, with its sender, subject and the 255-character preview Graph provides, fenced off as data. The answer has to fit a fixed JSON schema: reply, a task or nothing to do, whether a model could draft the reply, a category, a one-line summary and any deadline the mail names. Every field is checked, links are stripped from what the model writes, and the result is shown as plain text, so a message written to fool the model can at most mislabel itself. Mail the model says needs nothing stays off the list.
+- **If the model is down,** mail Outlook files under Focused is listed unsorted, the rest waits, and the next build tries again.
+- **Long sign-ins fit.** Windows Credential Manager refuses a value over 1,280 characters, and a Microsoft refresh token can be longer, so a long secret is stored in parts.
 
 How coursework gets there:
 
@@ -258,7 +267,7 @@ Settings of your own that shouldn't be published go in `config.local.yaml`, next
 | `routing.fallback_order` | What to try when the chosen model fails. |
 | `claude` | CLI path, timeout, tools to block, `use_subscription`, which strips `ANTHROPIC_API_KEY` from the `claude -p` environment so routed calls use your plan instead of API billing, and `skip_project_context`, which keeps this repo's `CLAUDE.md` files and Claude Code's auto memory out of routed calls. |
 | `pricing` | Per-million-token prices used for the API-rate estimates. |
-| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. `coursework` sets how far ahead an assignment is listed (`lookahead_days`) and how long after its due date (`overdue_days`). |
+| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. `coursework` sets how far ahead an assignment is listed (`lookahead_days`) and how long after its due date (`overdue_days`). `mail` takes your app registration's `client_id`, how far back to look (`lookback_days`) and how many messages to read (`max_messages`). |
 | `server.host` | Set to your Tailscale IP or `0.0.0.0` to open the dashboard from other devices. There is no login, so only expose it on a private network. |
 
 To send moderate coding work to Claude as well, uncomment the `code` rule in `config.yaml`. If Opus isn't available on your plan in Claude Code, complexity 5 prompts fall back to Sonnet on their own, or point the `expert` rule at `claude-sonnet`.
@@ -295,8 +304,8 @@ backend/switchboard/
   config.py        config.yaml models and validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
   desktop.py       the app window: server thread, tray icon, one copy per port, log file
-  brief/           the morning brief: its sources (a Canvas calendar feed so far), its own tables, the build and the brief command
-  credentials.py   secrets in the operating system's credential store, through keyring
+  brief/           the morning brief: its sources (Outlook through Microsoft Graph, a Canvas calendar feed), mail triage by a local model, its own tables, the build and the brief command
+  credentials.py   secrets in the operating system's credential store, through keyring, in parts when they are long
 backend/tests/     pytest suite
 frontend/src/      React + TypeScript dashboard
 ```

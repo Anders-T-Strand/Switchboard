@@ -33,7 +33,7 @@ class Service:
         self.index = TurnIndex(cfg, self.ollama) if cfg.index.enabled else None
         self.router = Router(cfg, self.ollama, self.claude, self.index)
         # The morning brief keeps to itself: its own tables, and never the router above.
-        self.brief = Brief(cfg, load_sources(cfg), create_task=self.create_task)
+        self.brief = Brief(cfg, load_sources(cfg, self.ollama), create_task=self.create_task)
 
     # Prompts -------------------------------------------------------------------
 

@@ -146,6 +146,20 @@ CREATE TABLE IF NOT EXISTS brief_sources (
   name TEXT PRIMARY KEY,             -- mail | coursework
   collected_at TEXT NOT NULL         -- when it last delivered. An open item it didn't list then is no longer current.
 );
+
+-- What the local model said about a message, so each message is sorted once. A newer message in
+-- the same conversation has an id of its own and is sorted again.
+CREATE TABLE IF NOT EXISTS brief_triage (
+  message_id TEXT PRIMARY KEY,
+  action TEXT NOT NULL,              -- reply | do | none
+  owner TEXT NOT NULL,               -- you | model
+  category TEXT,
+  summary TEXT,
+  reason TEXT,
+  due_at TEXT,                       -- a deadline the message names, YYYY-MM-DD
+  model_key TEXT,
+  judged_at TEXT NOT NULL
+);
 """
 
 # Columns added after the first release. init_db adds any that an existing database lacks.

@@ -193,10 +193,21 @@ class BriefCourseworkCfg(BaseModel):
     include_events: bool = False  # calendar events as well as assignments
 
 
+class BriefMailCfg(BaseModel):
+    """Mail from an Outlook inbox, read through Microsoft Graph. The sign-in itself is a secret and
+    isn't a setting."""
+    client_id: str | None = None  # the Application (client) ID of your own Microsoft Entra app registration
+    tenant: str = "consumers"  # consumers for a personal Microsoft account: outlook.com, live.com, hotmail.com
+    lookback_days: int = Field(14, ge=1, le=60)  # how far back to look for mail that may still need you
+    max_messages: int = Field(60, ge=1, le=500)  # at most this many messages are read per build
+    model: str | None = None  # the local model that sorts mail. Leave it out to use whichever is loaded.
+
+
 class BriefCfg(BaseModel):
     """The morning brief: a daily list of what needs doing, shown on the Today page."""
     enabled: bool = False
     coursework: BriefCourseworkCfg = Field(default_factory=BriefCourseworkCfg)
+    mail: BriefMailCfg = Field(default_factory=BriefMailCfg)
 
 
 class Config(BaseModel):
@@ -236,6 +247,11 @@ class Config(BaseModel):
         for rule in self.routing.rules:
             if rule.min_effort and rule.max_effort and EFFORTS.index(rule.min_effort) > EFFORTS.index(rule.max_effort):
                 problems.append(f"rule '{rule.name}' has min_effort above max_effort")
+        mail_model = self.brief.mail.model
+        if mail_model and mail_model not in known:
+            problems.append(f"brief.mail.model '{mail_model}' is not defined")
+        elif mail_model and self.models[mail_model].provider != "ollama":
+            problems.append("brief.mail.model must be a local (ollama) model, because mail never leaves this machine")
         if self.pricing.reference_model and self.pricing.reference_model not in self.pricing.models:
             problems.append(f"pricing.reference_model '{self.pricing.reference_model}' is not in pricing.models")
         if problems:

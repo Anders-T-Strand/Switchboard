@@ -247,8 +247,10 @@ def test_a_build_lists_coursework_and_lets_go_of_what_has_passed(cfg, monkeypatc
 
     run = brief.run("manual")
     assert run["status"] == "ok"
-    assert run["sources"] == [{"name": "coursework", "label": "Canvas", "connected": True, "ok": True, "items": 3,
-                               "error": None}]
+    by_name = {s["name"]: s for s in run["sources"]}
+    assert by_name["coursework"] == {"name": "coursework", "label": "Canvas", "connected": True, "ok": True,
+                                     "items": 3, "error": None, "note": None}
+    assert by_name["mail"]["connected"] is False  # not signed in, so the build leaves it alone
     assert [i["title"] for i in brief.view()["items"]] == ["Project proposal", "Problem set 6", "Lab report 4"]
 
     clock.forward(days=2)  # the proposal was due on the 14th. Two days after a due date, the list lets go of it.
@@ -267,14 +269,16 @@ def test_a_feed_that_fails_leaves_the_last_list_in_place(cfg, monkeypatch):
 
     clock.forward(hours=1)
     run = brief.run("manual")
-    assert (run["status"], run["sources"][0]["error"]) == ("error", "Canvas answered with HTTP 500.")
+    coursework = next(s for s in run["sources"] if s["name"] == "coursework")
+    assert (run["status"], coursework["error"]) == ("error", "Canvas answered with HTTP 500.")
     assert len(brief.view()["items"]) == 3
 
 
 def test_a_build_skips_canvas_until_it_is_connected(cfg, monkeypatch):
     seen = canvas(monkeypatch, serves_the_feed)
     run = Brief(cfg, load_sources(cfg), clock=Clock()).run("manual")
-    assert (run["status"], run["sources"][0]["connected"], seen) == ("ok", False, [])
+    coursework = next(s for s in run["sources"] if s["name"] == "coursework")
+    assert (run["status"], coursework["connected"], seen) == ("ok", False, [])
 
 
 # The command -----------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -29,22 +29,28 @@ class Found:
     received_at: str | None = None  # stamp() of the latest news about it, such as a new message
     link: str | None = None  # https only, and built by the source, never copied out of what it read
     done: bool = False  # the source knows it is handled, such as a mail that got its reply
+    done_at: str | None = None  # stamp() of when it was handled, if the source knows
 
 
 @dataclass
 class Usage:
-    """What the local model spent on one build."""
+    """What one build spent on the local model, and notes a source wants shown next to its result.
+    A note is shown on the page and saved with the run, so it says nothing from what was read."""
 
     model_key: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     model_ms: int = 0
+    notes: list[str] = field(default_factory=list)
 
     def add(self, model_key: str, input_tokens: int, output_tokens: int, ms: int) -> None:
         self.model_key = model_key
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
         self.model_ms += ms
+
+    def note(self, text: str) -> None:
+        self.notes.append(text)
 
 
 class SourceError(Exception):

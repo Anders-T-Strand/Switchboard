@@ -100,10 +100,11 @@ class Brief:
     def _collect(self, source: Source, now: datetime, usage: Usage) -> dict:
         """One source's part of a build. A source that fails is reported and the others go on."""
         result = {"name": source.name, "label": source.label, "connected": True, "ok": None, "items": 0,
-                  "error": None}
+                  "error": None, "note": None}
         if not source.connected():
             result["connected"] = False
             return result
+        before = len(usage.notes)
         try:
             found = source.collect(now, usage)
             store.save_found(source.name, found, stamp(now))
@@ -116,6 +117,7 @@ class Brief:
             # address or a line of what was being read, and this ends up in the log and on the page.
             log.error("brief source %s stopped with %s", source.name, type(e).__name__)
             result.update(ok=False, error=f"stopped unexpectedly ({type(e).__name__})")
+        result["note"] = " ".join(usage.notes[before:])[:300] or None
         return result
 
     # The Today page -------------------------------------------------------------------
