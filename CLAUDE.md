@@ -92,7 +92,7 @@ backend/switchboard/
   main.py          FastAPI app, background threads, serves the built dashboard at /
   desktop.py       the app window: uvicorn in a thread, pywebview window, pystray tray icon, one copy per port, log file
   brief/           the morning brief: base.py (what a source hands in), store.py (its tables), build.py, triage.py (sorts mail
-                   with a local model), demo.py, cli.py
+                   with a local model), drafts.py (writes replies with it), demo.py, cli.py
     sources/       outlook.py (Microsoft sign-in and Graph), ical.py (reads a calendar feed), canvas_feed.py (coursework)
   credentials.py   secrets in the operating system's credential store through keyring, in parts when long, with an env var override
   __main__.py      CLI: serve (--open), app (--hidden, --devtools), ask (--model, --effort, --task, --chat ID|last, --json), brief (build, status, demo, connect, disconnect), sync
@@ -130,6 +130,9 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 - **Tokens only go where they belong:** the refresh token to `login.microsoftonline.com`, the access token to `graph.microsoft.com`. `Mailbox._get` refuses any other address, including a next-page link that points elsewhere. Errors from sign-in show the AADSTS code and a hint, never Microsoft's description.
 - **`brief connect outlook` waits for Enter and uses the clipboard:** it shows the code first, copies it to the clipboard and opens Microsoft's page only after Enter, because a browser that opens at once covers the code. Tests use the `desk` fixture in `test_brief_mail.py`, which fakes the keyboard, the clipboard and the browser. Without it a test run would overwrite the clipboard and open a browser.
 - **`brief connect outlook` reuses a saved sign-in that still works:** it refreshes it, saves the renewed one and prints the shape, with no code. Only a sign-in that no longer works gets a new code. To switch accounts, `disconnect` first.
+- **Drafts read the whole conversation, once:** `Mailbox.thread` lists it by `conversationId` across folders and asks for `uniqueBody` as plain text, so each message comes without the ones it quotes. Yours are the ones whose `parentFolderId` is Sent Items. `drafts.prompt` keeps the message being answered and everything after it, then as much older text as fits in `THREAD` characters. A draft is cleared when a newer message arrives in its conversation.
+- **The fake Ollama drafts too:** a request whose schema has a `draft` field gets a made-up reply. `[LINKY]` in the thread adds links, `[BADJSON]` and `[EMPTY]` give answers that can't be used.
+- **A build and a draft renew the sign-in under one lock:** `outlook._sign_in`, so the newest refresh token is the one that gets saved.
 - **Something already handled is never stored:** a conversation answered before any build listed it is skipped by `save_found`, so an old reply doesn't turn up under Closed today. An item that was listed and then handled closes at the time of the reply.
 - **What a real Canvas feed looks like:** checked against one through `brief connect canvas`, which prints the feed's shape with no titles and no link in it. Every UID is `event-assignment-<n>`, every title ends in `[course]` and every URL points back at the same Canvas, which are the three things the reader relies on. Dates come both as all-day dates and with a time. The events also carry `DTEND`, `DTSTAMP`, `SEQUENCE`, `CLASS` and an HTML description in `X-ALT-DESC`, and the reader keeps none of them. To check a change against the real feed, ask the owner to run `brief connect canvas` again and paste what it prints. Never fetch the feed yourself.
 
@@ -141,8 +144,8 @@ A Today page, built once a day, that lists what needs doing: mail that needs a r
 
 1. **Foundations (done).** The `brief:` config section, the `config.local.yaml` overlay, `credentials.py`, the `brief_runs` and `brief_items` tables, a build with no sources yet, the API, the `brief` command and the Today page.
 2. **Coursework (done).** `brief connect canvas`, a reader for the Canvas calendar feed, and a list that only shows what a source still lists.
-3. **Mail (done).** `brief connect outlook`, Microsoft Graph, an answered-thread check and triage by the local model. Checked against a real Outlook.com mailbox through the shape `connect` prints: every `webLink` is on an allowed Outlook host, every message has a preview and Focused Inbox marks every message. The first limit of 60 messages proved too low for a real inbox, so it is 200 now. Reply detection isn't confirmed yet: `connect` now prints how much was sent in the same days. Sorting hasn't run on the real model yet.
-4. **Draft on click.** A Draft button that writes with the local model.
+3. **Mail (done).** `brief connect outlook`, Microsoft Graph, an answered-thread check and triage by the local model. Checked against a real Outlook.com mailbox through the shape `connect` prints: every `webLink` is on an allowed Outlook host, every message has a preview and Focused Inbox marks every message. The first limit of 60 messages proved too low for a real inbox, so it is 200 now. A second check confirmed reply detection: `connect` prints how much was sent in the same days, and those replies closed their conversations. The first real build ran on the owner's machine and looked right to them.
+4. **Draft on click (done).** A Draft button on mail cards that writes a reply with the local model, from the conversation and `brief.mail.writing_notes`. Not yet tried on real mail.
 5. **Schedule and notify.** A loop in the server that builds once a day, a notification when it is ready, a build on first open and a start-with-Windows shortcut.
 
 Decisions already made:

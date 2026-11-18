@@ -148,6 +148,8 @@ class FakeOllama:
             fmt = body.get("format")
             if isinstance(fmt, dict) and "action" in fmt.get("properties", {}):
                 content = self.triage(user)
+            elif isinstance(fmt, dict) and "draft" in fmt.get("properties", {}):
+                content = self.draft(user)
             elif "format" in body:
                 m = re.search(r"C(\d) R(\d)", user)
                 if m:
@@ -187,6 +189,21 @@ class FakeOllama:
             "reason": "A test label.",
             "due": due.group(1) if due else "",
         })
+
+
+    @staticmethod
+    def draft(user: str) -> str:
+        """A made-up reply. [LINKY] in the thread puts a link in it, [BADJSON] gets an answer that
+        isn't JSON, and [EMPTY] an empty draft."""
+        thread = user.split("<thread>", 1)[-1]
+        if "[BADJSON]" in thread:
+            return "Here is your draft: hello"
+        if "[EMPTY]" in thread:
+            return json.dumps({"draft": "  "})
+        text = "Hi,\n\n\n\nThanks for the note. [two times that work for you]\n\nBest,\nSam"
+        if "[LINKY]" in thread:
+            text += "\nSee https://phish.example/login and https://notes.example/me"
+        return json.dumps({"draft": text})
 
 
 @pytest.fixture

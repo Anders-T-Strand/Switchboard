@@ -15,7 +15,9 @@ Tokens go to Microsoft's sign-in and Graph and nowhere else, and no error messag
 
 from __future__ import annotations
 
+import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -28,7 +30,10 @@ from ...config import BriefMailCfg, Config
 from ...providers import OllamaClient
 from .. import store
 from ..base import Found, SourceError, Usage, stamp
+from ..drafts import Drafter, Message
 from ..triage import Mail, ModelUnavailable, Sorter, pick_model
+
+log = logging.getLogger("switchboard.brief")
 
 LOGIN = "https://login.microsoftonline.com"
 GRAPH = "https://graph.microsoft.com/v1.0"
@@ -42,6 +47,12 @@ TIMEOUT_S = 20
 PAGE = 50
 INBOX_FIELDS = "id,conversationId,subject,from,receivedDateTime,bodyPreview,webLink,flag,inferenceClassification"
 SENT_FIELDS = "conversationId,sentDateTime"
+THREAD_FIELDS = "subject,from,receivedDateTime,sentDateTime,uniqueBody,isDraft,parentFolderId"
+IMMUTABLE_IDS = 'IdType="ImmutableId"'  # keeps a message's id the same when it is moved to another folder
+BODY_AS_TEXT = 'outlook.body-content-type="text"'  # message text as plain text, not HTML
+
+# A build and a draft at the same time would each renew the sign-in and could save them in the wrong order.
+_sign_in = threading.Lock()
 
 
 def _client() -> httpx.Client:
@@ -158,12 +169,11 @@ class Mailbox:
         self.token = access_token
         self.http = http
 
-    def _get(self, url: str) -> dict:
+    def _get(self, url: str, prefer: str = IMMUTABLE_IDS) -> dict:
         if not url.startswith(GRAPH + "/"):  # the token only ever goes to Graph
             raise SourceError("Outlook pointed at an address outside Microsoft Graph.")
         try:
-            # ImmutableId keeps a message's id the same when it is moved to another folder.
-            r = self.http.get(url, headers={"Authorization": f"Bearer {self.token}", "Prefer": 'IdType="ImmutableId"'})
+            r = self.http.get(url, headers={"Authorization": f"Bearer {self.token}", "Prefer": prefer})
         except httpx.TimeoutException:
             raise SourceError("Outlook took too long to answer.") from None
         except httpx.HTTPError:
@@ -199,6 +209,22 @@ class Mailbox:
             found.extend(m for m in page.get("value") or [] if isinstance(m, dict))
             url = page.get("@odata.nextLink")
         return found[:limit], len(found) > limit or bool(url)
+
+    def thread(self, conversation_id: str, limit: int = 25) -> list[dict]:
+        """The messages of one conversation, in every folder, each with only the text it added
+        (`uniqueBody`, without the quoted messages before it), as plain text."""
+        literal = conversation_id.replace("'", "''")  # a quote inside an OData string is doubled
+        query = "&".join(f"{key}={quote(value, safe=',')}" for key, value in (
+            ("$filter", f"conversationId eq '{literal}'"),
+            ("$select", THREAD_FIELDS),
+            ("$top", str(limit)),
+        ))
+        page = self._get(f"{GRAPH}/me/messages?{query}", prefer=BODY_AS_TEXT)
+        return [m for m in page.get("value") or [] if isinstance(m, dict)]
+
+    def folder_id(self, name: str) -> str | None:
+        """The id of a well-known folder such as sentitems, to tell which messages are yours."""
+        return self._get(f"{GRAPH}/me/mailFolders/{name}?$select=id", prefer=BODY_AS_TEXT).get("id")
 
 
 @dataclass
@@ -267,6 +293,22 @@ class Snapshot:
     capped: bool  # there was more mail in those days than max_messages, and the oldest was left out
 
 
+def thread_messages(raw: list[dict], sent_folder: str | None) -> list[Message]:
+    """A conversation as the drafter sees it, oldest first. Yours are the ones in Sent Items, and
+    drafts are left out."""
+    found: list[Message] = []
+    for m in raw:
+        if m.get("isDraft"):
+            continue
+        mine = bool(sent_folder) and m.get("parentFolderId") == sent_folder
+        name, address = sender(m)
+        when = _time(m.get("sentDateTime") if mine else m.get("receivedDateTime")) or _time(m.get("receivedDateTime"))
+        text = str((m.get("uniqueBody") or {}).get("content") or "")
+        found.append(Message(mine=mine, sender="you" if mine else name or address or "someone", when=when,
+                             subject=str(m.get("subject") or ""), text=text))
+    return sorted(found, key=lambda m: m.when or datetime.min.replace(tzinfo=UTC))
+
+
 def read(cfg: BriefMailCfg, http: httpx.Client, access_token: str, now: datetime) -> Snapshot:
     box = Mailbox(access_token, http)
     since = now - timedelta(days=cfg.lookback_days)
@@ -314,25 +356,50 @@ class OutlookMail:
         self.mail = cfg.brief.mail
         self.ollama = ollama
         self.sorter = Sorter(cfg, ollama)
+        self.drafter = Drafter(cfg, ollama)
 
     def connected(self) -> bool:
         return bool(self.mail.client_id) and credentials.get(REFRESH_TOKEN) is not None
 
-    def collect(self, now: datetime, usage: Usage) -> list[Found]:
+    def _access_token(self, http: httpx.Client, usage: Usage | None = None) -> str:
+        """An access token for this one job, from the saved sign-in, which is renewed and saved again."""
         if not self.mail.client_id:
             raise SourceError(f"brief.mail.client_id isn't set. Set it in config.local.yaml, then run: {SETUP}")
-        refresh_token = credentials.get(REFRESH_TOKEN)
-        if not refresh_token:
-            raise SourceError(f"Outlook isn't connected. Run: {SETUP}")
-        with _client() as http:
+        with _sign_in:
+            refresh_token = credentials.get(REFRESH_TOKEN)
+            if not refresh_token:
+                raise SourceError(f"Outlook isn't connected. Run: {SETUP}")
             tokens = SignIn(self.mail, http).refresh(refresh_token)
-            renewed = tokens["refresh_token"]
-            if renewed != refresh_token:
+            if tokens["refresh_token"] != refresh_token:
                 try:
-                    credentials.save(REFRESH_TOKEN, renewed)
+                    credentials.save(REFRESH_TOKEN, tokens["refresh_token"])
                 except credentials.CredentialError:
-                    usage.note("The renewed Outlook sign-in couldn't be saved. If the next build fails, sign in again.")
-            snapshot = read(self.mail, http, tokens["access_token"], now)
+                    text = "The renewed Outlook sign-in couldn't be saved. If the next build fails, sign in again."
+                    if usage is not None:
+                        usage.note(text)
+                    else:
+                        log.warning(text)
+        return tokens["access_token"]
+
+    def draft(self, item: dict, now: datetime) -> tuple[str, str]:
+        """A reply to the newest message from someone else in the item's conversation, written by the
+        local model with your writing notes. Returns (text, model key). Nothing is sent."""
+        with _client() as http:
+            box = Mailbox(self._access_token(http), http)
+            sent_folder = box.folder_id("sentitems")
+            messages = thread_messages(box.thread(item["external_id"]), sent_folder)
+        if not any(not m.mine for m in messages):
+            raise SourceError("There's nothing from anyone else in this conversation to reply to.")
+        model_key = pick_model(self.cfg, self.ollama)
+        try:
+            text, _ = self.drafter.write(messages, self.mail.writing_notes, now, model_key)
+        except ModelUnavailable:
+            raise SourceError("The local model didn't answer. Is Ollama running?") from None
+        return text, model_key
+
+    def collect(self, now: datetime, usage: Usage) -> list[Found]:
+        with _client() as http:
+            snapshot = read(self.mail, http, self._access_token(http, usage), now)
         if snapshot.capped:
             usage.note(capped_note(self.mail))
         items = self.sort(snapshot.conversations, now, usage)

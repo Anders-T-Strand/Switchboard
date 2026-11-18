@@ -2,12 +2,12 @@ import { useEffect, useState, type ReactNode } from "react";
 import { api, type Brief, type BriefItem, type BriefItemStatus, type Task } from "../api";
 import { ErrorNote } from "../components/bits";
 import { dueLabel, when } from "../format";
-import { useApi } from "../hooks";
+import { useApi, useApp } from "../hooks";
 
 const IDLE_MS = 60_000;
 const BUILDING_MS = 2_000;
 
-type Act = (fn: () => Promise<unknown>) => void;
+type Act = (fn: () => Promise<unknown>) => Promise<void>;
 
 export function Today() {
   const [pollMs, setPollMs] = useState(IDLE_MS);
@@ -81,17 +81,17 @@ export function Today() {
 
       <Section title="Needs you" count={yours.length}>
         {yours.map((i) => (
-          <ItemCard key={i.id} item={i} onAct={act} />
+          <ItemCard key={i.id} item={i} onAct={act} onChanged={brief.reload} />
         ))}
       </Section>
       <Section title="A model can draft" count={draftable.length}>
         {draftable.map((i) => (
-          <ItemCard key={i.id} item={i} onAct={act} />
+          <ItemCard key={i.id} item={i} onAct={act} onChanged={brief.reload} />
         ))}
       </Section>
       <Section title="Coursework" count={coursework.length}>
         {coursework.map((i) => (
-          <ItemCard key={i.id} item={i} onAct={act} />
+          <ItemCard key={i.id} item={i} onAct={act} onChanged={brief.reload} />
         ))}
       </Section>
       <Section title="On your board" count={board.length} aside={<a href="#/tasks">Open the board</a>}>
@@ -150,12 +150,30 @@ function Section({ title, count, aside, children }: { title: string; count: numb
   );
 }
 
-function ItemCard({ item, onAct }: { item: BriefItem; onAct: Act }) {
+function ItemCard({ item, onAct, onChanged }: { item: BriefItem; onAct: Act; onChanged: () => void }) {
+  const [drafting, setDrafting] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
   const due = item.due_at ? dueLabel(item.due_at) : null;
   const set = (status: BriefItemStatus) => onAct(() => api.setBriefItem(item.id, status));
   // The server only stores https links. Checked again here, because a link is the one thing on
   // this card that gets followed.
   const link = item.link?.startsWith("https://") ? item.link : null;
+  const canDraft = item.source === "mail";
+
+  // Writing a draft takes a few seconds, so it runs here, with its own error, next to the card it is for.
+  const draft = async () => {
+    setDrafting(true);
+    setDraftError(null);
+    try {
+      await api.draftBriefItem(item.id);
+      onChanged();
+    } catch (e) {
+      setDraftError((e as Error).message);
+    } finally {
+      setDrafting(false);
+    }
+  };
+
   return (
     <article className="task-card brief-card">
       <h3>{item.title}</h3>
@@ -169,6 +187,11 @@ function ItemCard({ item, onAct }: { item: BriefItem; onAct: Act }) {
       {item.reason && <p className="hint brief-reason">{item.reason}</p>}
       {due && <p className={`task-meta due ${due.tone}`}>{due.text}</p>}
       <div className="task-actions">
+        {canDraft && !item.draft && (
+          <button className={item.owner === "model" ? "primary small" : "ghost small"} onClick={draft} disabled={drafting}>
+            {drafting ? "Drafting…" : "Draft a reply"}
+          </button>
+        )}
         <button className="ghost small" onClick={() => set("done")}>
           Done
         </button>
@@ -190,8 +213,60 @@ function ItemCard({ item, onAct }: { item: BriefItem; onAct: Act }) {
           </a>
         )}
       </div>
+      {draftError && <p className="draft-error" role="alert">{draftError}</p>}
+      {item.draft && <DraftPanel item={item} drafting={drafting} onRedo={draft} />}
     </article>
   );
+}
+
+/** A draft the local model wrote. Shown as plain text, for you to copy into your own reply. */
+function DraftPanel({ item, drafting, onRedo }: { item: BriefItem; drafting: boolean; onRedo: () => void }) {
+  const { label } = useApp();
+  const [copied, setCopied] = useState<boolean | null>(null);
+  const copy = async () => {
+    const ok = await copyText(item.draft ?? "");
+    setCopied(ok);
+    window.setTimeout(() => setCopied(null), 2500);
+  };
+  return (
+    <div className="draft">
+      <p className="draft-head">
+        Draft by {label(item.draft_model)}, {when(item.drafted_at)}. Nothing has been sent.
+      </p>
+      <pre className="draft-text">{item.draft}</pre>
+      <div className="task-actions">
+        <button className="primary small" onClick={copy}>
+          {copied === true ? "Copied" : copied === false ? "Couldn't copy" : "Copy"}
+        </button>
+        <button className="ghost small" onClick={onRedo} disabled={drafting}>
+          {drafting ? "Drafting…" : "Write it again"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Older WebView builds and some browsers refuse the clipboard API. A hidden text field still works.
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch {
+      ok = false;
+    }
+    area.remove();
+    return ok;
+  }
 }
 
 function BoardCard({ task }: { task: Task }) {

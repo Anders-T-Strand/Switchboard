@@ -160,7 +160,8 @@ def _demo(cfg: Config) -> int:
         return 1
     brief = _local_brief(cfg)
     brief.recover()
-    brief.run("demo", demo.sources())
+    run = brief.run("demo", demo.sources())
+    demo.add_draft(run["finished_at"])
     print(summary(brief.view(), brief.counts()))
     return 0
 

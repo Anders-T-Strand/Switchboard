@@ -16,7 +16,7 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
 - **Its own window on Windows.** `switchboard.cmd` opens the dashboard as a desktop app, with a tray icon and its own name and icon on the taskbar, and no terminal left open. It is the same local server in one Python process, with no Electron and no bundled exe.
-- **Tested and checked.** 237 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
+- **Tested and checked.** 248 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
 
 ## Architecture
 
@@ -135,6 +135,7 @@ How mail gets there:
 - **Handled mail leaves the list on its own.** A conversation where you replied after its last message is done, and so is one you flagged complete. A new message in it opens it again.
 - **Sorted by a local model and nothing else.** Each new message goes to Ollama once, with its sender, subject and the 255-character preview Graph provides, fenced off as data. The answer has to fit a fixed JSON schema: reply, a task or nothing to do, whether a model could draft the reply, a category, a one-line summary and any deadline the mail names. Every field is checked, links are stripped from what the model writes, and the result is shown as plain text, so a message written to fool the model can at most mislabel itself. Mail the model says needs nothing stays off the list.
 - **Each message is sorted once,** so a build reads up to 200 messages, newest first, and says so when there were more in those days. Only the first build takes a while.
+- **Drafts on request, never sent.** Draft a reply on any mail card and the local model writes one from the conversation's own text and a few lines you wrote about how you write. Graph gives each message without the quoted ones under it, so the model reads the thread once, oldest first, and the message being answered always fits. Where the reply needs something only you know, such as times you're free, it leaves a placeholder in brackets. The draft is shown as plain text with a Copy button, links it wasn't given in your notes become [link], and a new message in the conversation clears it. Switchboard can't send mail: its permission is read-only.
 - **If the model is down,** mail Outlook files under Focused is listed unsorted, the rest waits, and the next build tries again.
 - **Long sign-ins fit.** Windows Credential Manager refuses a value over 1,280 characters, and a Microsoft refresh token can be longer, so a long secret is stored in parts.
 
@@ -268,7 +269,7 @@ Settings of your own that shouldn't be published go in `config.local.yaml`, next
 | `routing.fallback_order` | What to try when the chosen model fails. |
 | `claude` | CLI path, timeout, tools to block, `use_subscription`, which strips `ANTHROPIC_API_KEY` from the `claude -p` environment so routed calls use your plan instead of API billing, and `skip_project_context`, which keeps this repo's `CLAUDE.md` files and Claude Code's auto memory out of routed calls. |
 | `pricing` | Per-million-token prices used for the API-rate estimates. |
-| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. `coursework` sets how far ahead an assignment is listed (`lookahead_days`) and how long after its due date (`overdue_days`). `mail` takes your app registration's `client_id`, how far back to look (`lookback_days`) and how many messages to read (`max_messages`). |
+| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. `coursework` sets how far ahead an assignment is listed (`lookahead_days`) and how long after its due date (`overdue_days`). `mail` takes your app registration's `client_id`, how far back to look (`lookback_days`), how many messages to read (`max_messages`) and a few lines on how you write, for drafts (`writing_notes`). |
 | `server.host` | Set to your Tailscale IP or `0.0.0.0` to open the dashboard from other devices. There is no login, so only expose it on a private network. |
 
 To send moderate coding work to Claude as well, uncomment the `code` rule in `config.yaml`. If Opus isn't available on your plan in Claude Code, complexity 5 prompts fall back to Sonnet on their own, or point the `expert` rule at `claude-sonnet`.
@@ -305,7 +306,7 @@ backend/switchboard/
   config.py        config.yaml models and validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
   desktop.py       the app window: server thread, tray icon, one copy per port, log file
-  brief/           the morning brief: its sources (Outlook through Microsoft Graph, a Canvas calendar feed), mail triage by a local model, its own tables, the build and the brief command
+  brief/           the morning brief: its sources (Outlook through Microsoft Graph, a Canvas calendar feed), mail triage and drafts by a local model, its own tables, the build and the brief command
   credentials.py   secrets in the operating system's credential store, through keyring, in parts when they are long
 backend/tests/     pytest suite
 frontend/src/      React + TypeScript dashboard

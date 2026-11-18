@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import claude_logs, stats
-from .brief import ItemNotFound
+from .brief import ItemNotFound, SourceError
 from .config import REPO_ROOT, Config, get_config
 from .db import init_db
 from .service import NotFound, Service
@@ -265,6 +265,18 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
             raise HTTPException(status_code=400, detail=str(e)) from e
         except ItemNotFound as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @app.post("/api/brief/items/{item_id}/draft")
+    def brief_item_draft(item_id: int):
+        """Write a reply with the local model and keep it on the item. It is never sent."""
+        try:
+            return svc.brief.draft(item_id)
+        except ItemNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        except SourceError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
 
     @app.post("/api/brief/items/{item_id}/task")
     def brief_item_task(item_id: int):
