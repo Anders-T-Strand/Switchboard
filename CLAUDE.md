@@ -28,6 +28,7 @@ cd backend
 # the morning brief. status and connect print counts and shapes, nothing from the items, so their output is safe to share
 .\.venv\Scripts\python -m switchboard brief status
 .\.venv\Scripts\python -m switchboard brief connect canvas   # asks for the feed link at a hidden prompt. The owner runs this, never an assistant
+.\.venv\Scripts\python -m switchboard brief connect outlook  # signs in to Microsoft with a code. The owner's too
 # made-up items for working on the Today page. Only runs on a config with a data folder of its own
 $env:SWITCHBOARD_CONFIG = "C:\path\to\a\copy-of-config.yaml"
 .\.venv\Scripts\python -m switchboard brief demo
@@ -90,9 +91,10 @@ backend/switchboard/
   config.py        pydantic models for config.yaml, with cross-reference validation
   main.py          FastAPI app, background threads, serves the built dashboard at /
   desktop.py       the app window: uvicorn in a thread, pywebview window, pystray tray icon, one copy per port, log file
-  brief/           the morning brief: base.py (what a source hands in), store.py (its tables), build.py, demo.py, cli.py
-    sources/       ical.py (reads a calendar feed) and canvas_feed.py (coursework from a Canvas feed)
-  credentials.py   secrets in the operating system's credential store through keyring, with an env var override
+  brief/           the morning brief: base.py (what a source hands in), store.py (its tables), build.py, triage.py (sorts mail
+                   with a local model), demo.py, cli.py
+    sources/       outlook.py (Microsoft sign-in and Graph), ical.py (reads a calendar feed), canvas_feed.py (coursework)
+  credentials.py   secrets in the operating system's credential store through keyring, in parts when long, with an env var override
   __main__.py      CLI: serve (--open), app (--hidden, --devtools), ask (--model, --effort, --task, --chat ID|last, --json), brief (build, status, demo, connect, disconnect), sync
 backend/tests/     pytest with the fakes described above
 frontend/src/      React 19 + TypeScript (strict) + Vite
@@ -117,11 +119,16 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 - **One copy per port:** the app binds the port before anything else. When that fails it posts to `/api/desktop/show` on whatever holds the port and exits. That route exists only in the app, not under `serve`.
 - **The brief stays out of the chat tables:** `_adopt_loose_requests` in `db.py` turns any request without a conversation into a chat at startup, and chats are indexed and can reach Claude through Memory. Brief data goes in `brief_runs` and `brief_items` only. A test checks that a build adds nothing to `requests`.
 - **What a brief source says when it fails is shown and saved:** raise `SourceError` with a message that is safe on the page. Any other exception is cut down to its type name, in the run and in the log, because an httpx error repeats the address it failed on, and a feed address is a secret.
-- **Real brief items are private:** they are someone's mail and coursework, and an assistant that reads them sends them to Claude. Don't open the Today page, read `brief_items` or call `/api/brief` on the real instance. Work with `brief demo` on a config of its own, and use `brief status`, which prints counts only.
+- **Real brief items are private:** they are someone's mail and coursework, and an assistant that reads them sends them to Claude. Don't open the Today page, read `brief_items` or `brief_triage`, call `/api/brief` or run a build on the real instance, and never run `brief connect` yourself. Work with `brief demo` on a config of its own, and use `brief status`, which prints counts only.
 - **`config.local.yaml` is looked for next to the config in use:** so a second instance on its own config never picks up the real one. The launchers read the Qdrant address from `config.yaml` alone, and an override of it in the local file isn't seen by them.
 - **The brief command must not find the real server in a test:** it asks a running Switchboard to do the work when one answers on the configured port, which is 8787 in the test config too. Patch `brief_cli.Server.find`, as the `no_server` fixture does.
 - **Tests get an empty credential store:** an autouse fixture in `conftest.py` puts a fake in place of `credentials._store` for every test and clears `SWITCHBOARD_` secrets from the environment. Without it, a test on a machine with a saved feed link would fetch the real feed.
 - **The Today page shows what a source still lists:** `brief_sources` records when each source last delivered, and an open item it didn't list then is hidden, not deleted. That is how coursework drops off after its due date. The comparison is by timestamp, so a test with a fixed clock has to move it forward between two builds.
+- **Windows Credential Manager holds 1,280 characters per entry:** measured, and a Microsoft refresh token can be longer. `credentials.save` splits a longer value into parts (`<name>.part1` and on) and the entry under the name says how many. The fake keyring in `conftest.py` refuses anything over 1,280 the same way, so a test that saves a long token goes through the parts.
+- **Mail is sorted once per message:** `brief_triage` keeps what the local model said, keyed by Graph's message id (asked for as an ImmutableId, so it survives a move to another folder). A newer message in the thread has its own id and is sorted again. A test that expects a model call needs a message the cache hasn't seen.
+- **The fake Ollama answers triage too:** a request whose JSON schema has an `action` field gets a mail label read from markers in the email: `[NOISE]`, `[DO]`, `[DRAFT]`, `[JOBS]`, `[DUE yyyy-mm-dd]`, `[LINKY]` and `[BADJSON]`.
+- **Tokens only go where they belong:** the refresh token to `login.microsoftonline.com`, the access token to `graph.microsoft.com`. `Mailbox._get` refuses any other address, including a next-page link that points elsewhere. Errors from sign-in show the AADSTS code and a hint, never Microsoft's description.
+- **Something already handled is never stored:** a conversation answered before any build listed it is skipped by `save_found`, so an old reply doesn't turn up under Closed today. An item that was listed and then handled closes at the time of the reply.
 - **What a real Canvas feed looks like:** checked against one through `brief connect canvas`, which prints the feed's shape with no titles and no link in it. Every UID is `event-assignment-<n>`, every title ends in `[course]` and every URL points back at the same Canvas, which are the three things the reader relies on. Dates come both as all-day dates and with a time. The events also carry `DTEND`, `DTSTAMP`, `SEQUENCE`, `CLASS` and an HTML description in `X-ALT-DESC`, and the reader keeps none of them. To check a change against the real feed, ask the owner to run `brief connect canvas` again and paste what it prints. Never fetch the feed yourself.
 
 ## Next steps
@@ -132,14 +139,14 @@ A Today page, built once a day, that lists what needs doing: mail that needs a r
 
 1. **Foundations (done).** The `brief:` config section, the `config.local.yaml` overlay, `credentials.py`, the `brief_runs` and `brief_items` tables, a build with no sources yet, the API, the `brief` command and the Today page.
 2. **Coursework (done).** `brief connect canvas`, a reader for the Canvas calendar feed, and a list that only shows what a source still lists.
-3. **Mail.** `brief connect outlook`, Microsoft Graph, an answered-thread check and triage by the local model.
+3. **Mail (done).** `brief connect outlook`, Microsoft Graph, an answered-thread check and triage by the local model. Not yet checked against a real mailbox: `brief connect outlook` prints the mailbox's shape for that.
 4. **Draft on click.** A Draft button that writes with the local model.
 5. **Schedule and notify.** A loop in the server that builds once a day, a notification when it is ready, a build on first open and a start-with-Windows shortcut.
 
 Decisions already made:
 
 - **Mail is Outlook, read through Microsoft Graph** with the `Mail.Read` scope, which can't send or change anything. Sign-in is the device code flow on the `consumers` tenant, with the owner's own app registration. Its client id goes in `config.local.yaml` and the refresh token in the credential store. Registering an app needs a directory, which a personal account may have to create first.
-- **Triage reads the sender, the subject and `bodyPreview`,** the first 255 characters. The full body is fetched only when a draft is asked for.
+- **Triage reads the sender, the subject and `bodyPreview`,** the first 255 characters, and Outlook's Focused or Other. The full body is fetched only when a draft is asked for (step 4). When the model is down, Focused mail is listed unsorted and the rest waits.
 - **Coursework is the Canvas calendar feed,** because API tokens aren't available. It gives due dates and no submission status, so coursework is ticked off by hand and leaves the list `overdue_days` after it was due. The feed address works like a password and goes in the credential store. An assignment due at 11:59 PM arrives as an all-day event.
 - **Delegate means sort, then draft on click.** Each item is marked `you` or `model`. Nothing is drafted until asked, and nothing is ever sent.
 - **Local only.** The brief never calls Claude, not even on summaries.

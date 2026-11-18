@@ -23,7 +23,10 @@ from switchboard.providers.ollama import OllamaClient
 
 
 class FakeKeyring:
-    """Stands in for the keyring module."""
+    """Stands in for the keyring module. Like Windows Credential Manager, it refuses a value longer
+    than 1,280 characters."""
+
+    LIMIT = 1280
 
     def __init__(self):
         self.saved: dict[tuple[str, str], str] = {}
@@ -32,6 +35,8 @@ class FakeKeyring:
         return self.saved.get((service, name))
 
     def set_password(self, service, name, value):
+        if len(value) > self.LIMIT:
+            raise OSError("The stub received bad data.")  # what Windows says, and nothing of the value
         self.saved[(service, name)] = value
 
     def delete_password(self, service, name):
@@ -140,7 +145,10 @@ class FakeOllama:
             body = json.loads(request.content)
             self.chat_calls.append(body)
             user = body["messages"][-1]["content"]
-            if "format" in body:
+            fmt = body.get("format")
+            if isinstance(fmt, dict) and "action" in fmt.get("properties", {}):
+                content = self.triage(user)
+            elif "format" in body:
                 m = re.search(r"C(\d) R(\d)", user)
                 if m:
                     label = {"task_type": "code", "complexity": int(m[1]), "reasoning": int(m[2]), "reason": "set"}
@@ -160,6 +168,25 @@ class FakeOllama:
                 "prompt_eval_count": 42, "eval_count": 7, "load_duration": 2_000_000,
             })
         return httpx.Response(404, json={"error": "not found"})
+
+    @staticmethod
+    def triage(user: str) -> str:
+        """Mail labels, read from markers in the email: [NOISE] nothing to do, [DO] a task, [DRAFT] a
+        reply a model can draft, [JOBS] the jobs category, [DUE yyyy-mm-dd] a deadline, [LINKY] a
+        summary with a link in it, [BADJSON] an answer that isn't JSON. Anything else is a reply only
+        you can write."""
+        email = user.split("<email>", 1)[-1]
+        if "[BADJSON]" in email:
+            return "Sorry, I can't sort that one."
+        due = re.search(r"\[DUE (\d{4}-\d{2}-\d{2})\]", email)
+        return json.dumps({
+            "action": "none" if "[NOISE]" in email else "do" if "[DO]" in email else "reply",
+            "owner": "model" if "[DRAFT]" in email else "you",
+            "category": "jobs" if "[JOBS]" in email else "other",
+            "summary": "Wants an answer, see https://phish.example/login" if "[LINKY]" in email else "Wants an answer.",
+            "reason": "A test label.",
+            "due": due.group(1) if due else "",
+        })
 
 
 @pytest.fixture

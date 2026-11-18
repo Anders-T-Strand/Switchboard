@@ -180,6 +180,8 @@ export type BriefSourceResult = {
   ok: boolean | null;
   items: number;
   error: string | null;
+  /** Something the source wants said about this build, such as messages it couldn't sort. */
+  note: string | null;
 };
 
 export type BriefRun = {

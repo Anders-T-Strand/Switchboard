@@ -212,10 +212,13 @@ def test_a_source_that_knows_an_item_is_handled_closes_it(cfg):
     source = FakeSource("mail", [found(1)])
     brief = Brief(cfg, [source], clock=Clock())
     brief.run("manual")
-    source.found = [found(1, done=True), found(2, done=True)]  # the first got its reply. The second arrived answered.
+    replied = stamp(MORNING - timedelta(minutes=30))
+    # The first got its reply. The second was answered before any build had listed it.
+    source.found = [found(1, done=True, done_at=replied), found(2, done=True)]
     brief.run("manual")
 
-    assert [(r["status"], r["status_at"] is not None) for r in item_rows()] == [("done", True), ("done", True)]
+    # Closed when the reply went out, and the one that was never on the list isn't stored at all.
+    assert [(r["external_id"], r["status"], r["status_at"]) for r in item_rows()] == [("id-1", "done", replied)]
 
 
 def test_a_failing_source_is_reported_and_the_others_go_on(cfg, caplog):
@@ -416,8 +419,12 @@ def test_api_brief_is_off_until_it_is_turned_on(client):
     view = client.get("/api/brief").json()
     assert (view["enabled"], view["building"], view["run"], view["items"]) == (False, False, None, [])
     # Every source is listed, with the command that connects it, so the page can say what to do.
-    assert view["sources"] == [{"name": "coursework", "label": "Canvas", "connected": False,
-                                "setup": "python -m switchboard brief connect canvas"}]
+    assert view["sources"] == [
+        {"name": "mail", "label": "Outlook", "connected": False,
+         "setup": "python -m switchboard brief connect outlook"},
+        {"name": "coursework", "label": "Canvas", "connected": False,
+         "setup": "python -m switchboard brief connect canvas"},
+    ]
     refused = client.post("/api/brief/run")
     assert refused.status_code == 400 and "turned off" in refused.json()["detail"]
     assert client.get("/api/config").json()["brief"]["enabled"] is False

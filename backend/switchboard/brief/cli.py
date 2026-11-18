@@ -3,7 +3,8 @@
     python -m switchboard brief                     build today's brief now
     python -m switchboard brief status              what the last build found, as counts
     python -m switchboard brief connect canvas      save your Canvas calendar feed link
-    python -m switchboard brief disconnect canvas   remove it again
+    python -m switchboard brief connect outlook     sign in to Outlook with a code
+    python -m switchboard brief disconnect canvas   remove the link again (or: disconnect outlook)
     python -m switchboard brief demo                fill a test database with made-up items
 
 `status` and `connect` print numbers and shapes and nothing from the items themselves, so their
@@ -12,6 +13,7 @@ output is safe to paste somewhere or to show to an assistant.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import time
 from datetime import datetime
@@ -86,6 +88,8 @@ def summary(view: dict, counts: dict) -> str:
             else:
                 outcome = f"failed, {s['error']}"
             lines.append(f"  {s['label']}: {outcome}")
+            if s.get("note"):
+                lines.append(f"    {s['note']}")
         if run["error"]:
             lines.append(f"  {run['error']}")
     by_source = ", ".join(f"{name} {n}" for name, n in counts["open_by_source"].items())
@@ -206,7 +210,82 @@ def _disconnect_canvas(cfg: Config) -> int:
     return 0
 
 
-TARGETS = {"canvas": (_connect_canvas, _disconnect_canvas)}
+REGISTER = """Outlook needs an app registration of your own before it can sign in. It's free and takes a few minutes.
+
+  1. Sign in at https://entra.microsoft.com with your Microsoft account. Open App registrations and
+     click New registration. If it says your account needs a directory first, a free Azure account
+     gives it one.
+  2. Name it Switchboard and pick "Personal Microsoft accounts only". Leave the redirect URI empty.
+  3. Under Authentication, set "Allow public client flows" to Yes and save.
+  4. Under API permissions, add the Microsoft Graph delegated permissions Mail.Read and offline_access.
+  5. Copy the Application (client) ID from the Overview page into config.local.yaml, next to config.yaml:
+
+       brief:
+         mail:
+           client_id: <the id>
+
+Then run this command again."""
+
+
+def _connect_outlook(cfg: Config) -> int:
+    """Sign in to Outlook with a code, then save the sign-in to the credential store. What it prints
+    is the mailbox's shape and nothing any message says."""
+    import webbrowser
+
+    from .sources import outlook
+
+    mail = cfg.brief.mail
+    if not mail.client_id:
+        print(REGISTER)
+        return 1
+    with outlook._client() as http:
+        sign_in = outlook.SignIn(mail, http)
+        try:
+            flow = sign_in.start()
+        except SourceError as e:
+            print(f"Couldn't start the sign-in. {e}", file=sys.stderr)
+            return 1
+        print(f"Open {flow['verification_uri']} and enter the code {flow['user_code']}.")
+        print("Sign in with the Microsoft account whose mail the brief should read, and let Switchboard read it.")
+        if str(flow["verification_uri"]).startswith("https://"):
+            with contextlib.suppress(Exception):
+                webbrowser.open(flow["verification_uri"])
+        print("Waiting for the sign-in. Press Ctrl+C to stop.")
+        try:
+            tokens = sign_in.wait(flow)
+        except SourceError as e:
+            print(f"Not connected. {e}", file=sys.stderr)
+            return 1
+        except KeyboardInterrupt:
+            print("Stopped. Nothing was saved.", file=sys.stderr)
+            return 1
+        try:
+            credentials.save(outlook.REFRESH_TOKEN, tokens["refresh_token"])
+        except credentials.CredentialError as e:
+            print(f"Signed in, but not saved. {e}", file=sys.stderr)
+            return 1
+        print("Signed in, and saved the sign-in to this machine's credential store.")
+        try:
+            found = outlook.read(mail, http, tokens["access_token"], datetime.now().astimezone())
+        except SourceError as e:
+            print(f"Reading the inbox failed. {e}", file=sys.stderr)
+            return 1
+    print("\n".join(outlook.shape(found, mail)))
+    if not cfg.brief.enabled:
+        print(OFF)
+    return 0
+
+
+def _disconnect_outlook(cfg: Config) -> int:
+    from .sources import outlook
+
+    removed = credentials.forget(outlook.REFRESH_TOKEN)
+    print("Removed the Outlook sign-in from this machine." if removed else "There was no Outlook sign-in saved.")
+    print("To take back the permission itself, remove Switchboard from the apps that can use your Microsoft account.")
+    return 0
+
+
+TARGETS = {"canvas": (_connect_canvas, _disconnect_canvas), "outlook": (_connect_outlook, _disconnect_outlook)}
 
 
 def _target(args, cfg: Config) -> int:

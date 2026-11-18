@@ -82,11 +82,12 @@ def save_found(source: str, found: list[Found], ts: str) -> None:
 
     An item keeps its status from one build to the next, with two exceptions. News that arrived
     after it was closed, such as a new message in a mail thread, opens it again. And a source that
-    knows an item is handled closes it."""
+    knows an item is handled closes it. Something that was already handled before it was ever
+    listed is not stored at all, so a reply sent last week doesn't turn up as closed today."""
     with connect() as conn:
         for f in found:
             values = asdict(f)
-            done = values.pop("done")
+            done, done_at = values.pop("done"), values.pop("done_at") or ts
             for field, limit in _LIMITS.items():
                 if values[field]:
                     values[field] = clip(str(values[field]), limit)
@@ -101,9 +102,10 @@ def save_found(source: str, found: list[Found], ts: str) -> None:
                 (source, f.external_id),
             ).fetchone()
             if known is None:
+                if done:
+                    continue
                 values["owner"] = values["owner"] or "you"
-                values.update(source=source, status="done" if done else "open", status_at=ts if done else None,
-                              first_seen_at=ts, last_seen_at=ts)
+                values.update(source=source, status="open", status_at=None, first_seen_at=ts, last_seen_at=ts)
                 cols = ", ".join(values)
                 marks = ", ".join(f":{k}" for k in values)
                 conn.execute(f"INSERT INTO brief_items ({cols}) VALUES ({marks})", values)
@@ -112,7 +114,7 @@ def save_found(source: str, found: list[Found], ts: str) -> None:
             status, status_at = known["status"], known["status_at"]
             if done:
                 if status == "open":
-                    status, status_at = "done", ts
+                    status, status_at = "done", done_at
             elif status != "open" and f.received_at and status_at and f.received_at > status_at:
                 status, status_at = "open", ts
             values.pop("external_id")
@@ -122,6 +124,43 @@ def save_found(source: str, found: list[Found], ts: str) -> None:
             values.update(status=status, status_at=status_at, last_seen_at=ts)
             sets = ", ".join(f"{k} = :{k}" for k in values)
             conn.execute(f"UPDATE brief_items SET {sets} WHERE id = :id", {**values, "id": known["id"]})
+
+
+# What the local model said about each message ------------------------------------------
+
+
+def judgments(message_ids: list[str]) -> dict[str, dict]:
+    """Earlier judgments of these messages, by message id."""
+    if not message_ids:
+        return {}
+    found: dict[str, dict] = {}
+    with connect() as conn:
+        for i in range(0, len(message_ids), 500):  # SQLite caps how many values one query can take
+            chunk = message_ids[i:i + 500]
+            for r in conn.execute(
+                f"SELECT * FROM brief_triage WHERE message_id IN ({','.join('?' * len(chunk))})", chunk
+            ):
+                found[r["message_id"]] = dict(r)
+    return found
+
+
+def save_judgment(message_id: str, judgment: dict, model_key: str, ts: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """INSERT INTO brief_triage (message_id, action, owner, category, summary, reason, due_at, model_key,
+                                         judged_at)
+               VALUES (:message_id, :action, :owner, :category, :summary, :reason, :due_at, :model_key, :judged_at)
+               ON CONFLICT(message_id) DO UPDATE SET action = excluded.action, owner = excluded.owner,
+                 category = excluded.category, summary = excluded.summary, reason = excluded.reason,
+                 due_at = excluded.due_at, model_key = excluded.model_key, judged_at = excluded.judged_at""",
+            {**judgment, "message_id": message_id, "model_key": model_key, "judged_at": ts},
+        )
+
+
+def prune_judgments(before: str) -> int:
+    """Forget judgments made before `before`. Their messages are long out of the lookback window."""
+    with connect() as conn:
+        return conn.execute("DELETE FROM brief_triage WHERE judged_at < ?", (before,)).rowcount
 
 
 def mark_collected(source: str, ts: str) -> None:

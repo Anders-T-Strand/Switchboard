@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
                        choices=["build", "status", "demo", "connect", "disconnect"],
                        help="build it now (the default), print the last build as counts, fill a test database "
                             "with made-up items, or connect and disconnect a source")
-    brief.add_argument("target", nargs="?", help="what to connect or disconnect: canvas")
+    brief.add_argument("target", nargs="?", help="what to connect or disconnect: canvas or outlook")
 
     sub.add_parser("sync", help="read Claude Code logs once and print a summary")
     return parser

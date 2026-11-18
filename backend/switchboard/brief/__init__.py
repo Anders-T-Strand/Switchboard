@@ -17,9 +17,11 @@ __all__ = ["OFF", "Brief", "Busy", "Found", "ItemNotFound", "Source", "SourceErr
            "stamp"]
 
 
-def load_sources(cfg: Config) -> list[Source]:
+def load_sources(cfg: Config, ollama=None) -> list[Source]:
     """Every source there is, connected or not. One that isn't connected is skipped by a build, and
-    the Today page says how to connect it. Mail comes next."""
+    the Today page says how to connect it. `ollama` is the client mail is sorted with."""
+    from ..providers import OllamaClient
     from .sources.canvas_feed import CanvasFeed
+    from .sources.outlook import OutlookMail
 
-    return [CanvasFeed(cfg.brief.coursework)]
+    return [OutlookMail(cfg, ollama or OllamaClient(cfg.ollama)), CanvasFeed(cfg.brief.coursework)]

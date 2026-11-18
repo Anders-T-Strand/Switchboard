@@ -160,6 +160,15 @@ brief:
     lookahead_days: 7      # how far ahead something due is listed
     overdue_days: 2        # how long it stays listed after it was due. The feed can't tell if you handed it in.
     include_events: false  # also list calendar events, not only assignments
+  # Mail from an Outlook inbox, read through Microsoft Graph and sorted by a local model only.
+  # Put your app registration's client_id in config.local.yaml, then sign in with:
+  # python -m switchboard brief connect outlook
+  mail:
+    client_id: null        # the Application (client) ID of your own Microsoft Entra app registration
+    tenant: consumers      # consumers for a personal Microsoft account (outlook.com, live.com, hotmail.com)
+    lookback_days: 14      # how far back to look for mail that may still need you
+    max_messages: 60       # at most this many messages are read per build
+    # model: qwen-moe      # the local model that sorts mail. Leave it out to use whichever is loaded.
 
 # USD per million tokens (Claude API list prices, Oct 2026). Used for API-equivalent cost
 # estimates only. Your Pro plan isn't billed per token, so treat these as "what this would

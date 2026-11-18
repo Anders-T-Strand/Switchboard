@@ -42,6 +42,7 @@ export function Today() {
   const board = (tasks.data ?? []).filter((t) => t.status !== "done");
   const builtToday = data.run !== null && data.run.day === data.day && data.run.status !== "running";
   const failed = (data.run?.sources ?? []).filter((s) => s.ok === false);
+  const noted = (data.run?.sources ?? []).filter((s) => s.note);
 
   return (
     <div className="stack">
@@ -71,6 +72,11 @@ export function Today() {
         <ErrorNote key={s.name}>
           {s.label}: {s.error}
         </ErrorNote>
+      ))}
+      {noted.map((s) => (
+        <p className="hint" key={`${s.name}-note`}>
+          {s.label}: {s.note}
+        </p>
       ))}
 
       <Section title="Needs you" count={yours.length}>
