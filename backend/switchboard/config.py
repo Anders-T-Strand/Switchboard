@@ -199,7 +199,9 @@ class BriefMailCfg(BaseModel):
     client_id: str | None = None  # the Application (client) ID of your own Microsoft Entra app registration
     tenant: str = "consumers"  # consumers for a personal Microsoft account: outlook.com, live.com, hotmail.com
     lookback_days: int = Field(14, ge=1, le=60)  # how far back to look for mail that may still need you
-    max_messages: int = Field(60, ge=1, le=500)  # at most this many messages are read per build
+    # At most this many messages are read per build, newest first. Each one is sorted by the local model
+    # only once, so a high number costs time on the first build and little after that.
+    max_messages: int = Field(200, ge=1, le=1000)
     model: str | None = None  # the local model that sorts mail. Leave it out to use whichever is loaded.
 
 

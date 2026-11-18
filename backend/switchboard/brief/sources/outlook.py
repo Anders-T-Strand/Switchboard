@@ -182,8 +182,9 @@ class Mailbox:
             raise SourceError("Outlook sent something that isn't JSON.") from None
         return data if isinstance(data, dict) else {}
 
-    def messages(self, folder: str, field: str, since: datetime, limit: int, fields: str) -> list[dict]:
-        """Messages in a folder from `since` on, newest first, following Graph's pages up to `limit`."""
+    def messages(self, folder: str, field: str, since: datetime, limit: int, fields: str) -> tuple[list[dict], bool]:
+        """Messages in a folder from `since` on, newest first, following Graph's pages up to `limit`,
+        and whether there were more than that."""
         since_text = since.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         query = "&".join(f"{key}={quote(value, safe=',')}" for key, value in (
             ("$filter", f"{field} ge {since_text}"),
@@ -197,7 +198,7 @@ class Mailbox:
             page = self._get(url)
             found.extend(m for m in page.get("value") or [] if isinstance(m, dict))
             url = page.get("@odata.nextLink")
-        return found[:limit]
+        return found[:limit], len(found) > limit or bool(url)
 
 
 @dataclass
@@ -256,21 +257,40 @@ def own_link(message: dict) -> str | None:
     return str(link) if link and url.scheme == "https" and url.host.lower() in OUTLOOK_HOSTS else None
 
 
-def read(cfg: BriefMailCfg, http: httpx.Client, access_token: str, now: datetime) -> list[Conversation]:
+@dataclass
+class Snapshot:
+    """What one read of the mailbox found."""
+
+    conversations: list[Conversation]
+    messages: int  # inbox messages read
+    sent: int  # messages you sent in the same days
+    capped: bool  # there was more mail in those days than max_messages, and the oldest was left out
+
+
+def read(cfg: BriefMailCfg, http: httpx.Client, access_token: str, now: datetime) -> Snapshot:
     box = Mailbox(access_token, http)
     since = now - timedelta(days=cfg.lookback_days)
-    inbox = box.messages("inbox", "receivedDateTime", since, cfg.max_messages, INBOX_FIELDS)
-    sent = box.messages("sentitems", "sentDateTime", since, max(cfg.max_messages * 2, PAGE), SENT_FIELDS)
-    return conversations(inbox, sent)
+    inbox, capped = box.messages("inbox", "receivedDateTime", since, cfg.max_messages, INBOX_FIELDS)
+    sent, _ = box.messages("sentitems", "sentDateTime", since, max(cfg.max_messages * 2, PAGE), SENT_FIELDS)
+    return Snapshot(conversations(inbox, sent), len(inbox), len(sent), capped)
 
 
-def shape(found: list[Conversation], cfg: BriefMailCfg) -> list[str]:
+def capped_note(cfg: BriefMailCfg) -> str:
+    return (f"Only the newest {cfg.max_messages} messages from the last {cfg.lookback_days} days were read. "
+            "Raise brief.mail.max_messages to read them all.")
+
+
+def shape(snapshot: Snapshot, cfg: BriefMailCfg) -> list[str]:
     """What the mailbox looks like, in lines that hold nothing any message says: counts of messages,
     conversations, replies, flags and links. Safe to print and to pass on."""
+    found = snapshot.conversations
     focus = [c.latest.get("inferenceClassification") for c in found]
-    return [
-        f"The inbox has {sum(c.count for c in found)} messages from the last {cfg.lookback_days} days, "
-        f"in {len(found)} conversations.",
+    lines = [f"The inbox has {snapshot.messages} messages from the last {cfg.lookback_days} days, "
+             f"in {len(found)} conversations."]
+    if snapshot.capped:
+        lines.append(f"  {capped_note(cfg)}")
+    return lines + [
+        f"  sent by you in the same days: {snapshot.sent}",
         f"  answered by you after their last message: {sum(1 for c in found if c.replied_at)}",
         f"  last message flagged complete: {sum(1 for c in found if c.flagged_done)}",
         f"  Focused Inbox: {focus.count('focused')} focused, {focus.count('other')} other, "
@@ -312,8 +332,10 @@ class OutlookMail:
                     credentials.save(REFRESH_TOKEN, renewed)
                 except credentials.CredentialError:
                     usage.note("The renewed Outlook sign-in couldn't be saved. If the next build fails, sign in again.")
-            found = read(self.mail, http, tokens["access_token"], now)
-        items = self.sort(found, now, usage)
+            snapshot = read(self.mail, http, tokens["access_token"], now)
+        if snapshot.capped:
+            usage.note(capped_note(self.mail))
+        items = self.sort(snapshot.conversations, now, usage)
         store.prune_judgments(stamp(now - timedelta(days=self.mail.lookback_days * 2)))
         return items
 

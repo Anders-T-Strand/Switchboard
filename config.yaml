@@ -167,7 +167,7 @@ brief:
     client_id: null        # the Application (client) ID of your own Microsoft Entra app registration
     tenant: consumers      # consumers for a personal Microsoft account (outlook.com, live.com, hotmail.com)
     lookback_days: 14      # how far back to look for mail that may still need you
-    max_messages: 60       # at most this many messages are read per build
+    max_messages: 200      # at most this many are read per build. Each is sorted once, so only the first build is slow.
     # model: qwen-moe      # the local model that sorts mail. Leave it out to use whichever is loaded.
 
 # USD per million tokens (Claude API list prices, Oct 2026). Used for API-equivalent cost

@@ -265,8 +265,9 @@ def _show_code(flow: dict, open_page) -> None:
 
 
 def _connect_outlook(cfg: Config) -> int:
-    """Sign in to Outlook with a code, then save the sign-in to the credential store. What it prints
-    is the mailbox's shape and nothing any message says."""
+    """Sign in to Outlook with a code, then save the sign-in to the credential store. When a saved
+    sign-in still works, it is used and no code is needed, so running this again just checks the
+    mailbox. What it prints is the mailbox's shape and nothing any message says."""
     import webbrowser
 
     from .sources import outlook
@@ -277,32 +278,47 @@ def _connect_outlook(cfg: Config) -> int:
         return 1
     with outlook._client() as http:
         sign_in = outlook.SignIn(mail, http)
-        try:
-            flow = sign_in.start()
-        except SourceError as e:
-            print(f"Couldn't start the sign-in. {e}", file=sys.stderr)
-            return 1
-        try:
-            _show_code(flow, webbrowser.open)
-            tokens = sign_in.wait(flow)
-        except SourceError as e:
-            print(f"Not connected. {e}", file=sys.stderr)
-            return 1
-        except KeyboardInterrupt:
-            print("Stopped. Nothing was saved.", file=sys.stderr)
-            return 1
+        tokens = None
+        saved = credentials.get(outlook.REFRESH_TOKEN)
+        if saved:
+            try:
+                tokens = sign_in.refresh(saved)
+            except SourceError:
+                print("The saved sign-in no longer works, so here is a new code.")
+            else:
+                print("Already signed in, so no code is needed. To sign in as someone else, run "
+                      "python -m switchboard brief disconnect outlook first.")
+        if tokens is None:
+            try:
+                flow = sign_in.start()
+            except SourceError as e:
+                print(f"Couldn't start the sign-in. {e}", file=sys.stderr)
+                return 1
+            try:
+                _show_code(flow, webbrowser.open)
+                tokens = sign_in.wait(flow)
+            except SourceError as e:
+                print(f"Not connected. {e}", file=sys.stderr)
+                return 1
+            except KeyboardInterrupt:
+                print("Stopped. Nothing was saved.", file=sys.stderr)
+                return 1
+            signed_in = "Signed in, and saved the sign-in to this machine's credential store."
+        else:
+            signed_in = None
         try:
             credentials.save(outlook.REFRESH_TOKEN, tokens["refresh_token"])
         except credentials.CredentialError as e:
             print(f"Signed in, but not saved. {e}", file=sys.stderr)
             return 1
-        print("Signed in, and saved the sign-in to this machine's credential store.")
+        if signed_in:
+            print(signed_in)
         try:
-            found = outlook.read(mail, http, tokens["access_token"], datetime.now().astimezone())
+            snapshot = outlook.read(mail, http, tokens["access_token"], datetime.now().astimezone())
         except SourceError as e:
             print(f"Reading the inbox failed. {e}", file=sys.stderr)
             return 1
-    print("\n".join(outlook.shape(found, mail)))
+    print("\n".join(outlook.shape(snapshot, mail)))
     if not cfg.brief.enabled:
         print(OFF)
     return 0
