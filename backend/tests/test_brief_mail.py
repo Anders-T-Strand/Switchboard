@@ -265,9 +265,12 @@ def test_network_trouble_never_repeats_a_token(mail_cfg, monkeypatch):
 
 def test_read_asks_graph_for_recent_mail_and_follows_its_pages(mail_cfg, ms):
     ms.inbox = [message(n, hours_ago=n) for n in range(1, 121)]
-    found = outlook.read(mail_cfg.brief.mail, outlook._client(), ACCESS, MORNING)
+    ms.sent = [reply("conv-1", 0.5)]
+    mail_cfg.brief.mail.max_messages = 60
+    snapshot = outlook.read(mail_cfg.brief.mail, outlook._client(), ACCESS, MORNING)
 
-    assert len(found) == 60  # max_messages
+    assert (snapshot.messages, len(snapshot.conversations), snapshot.sent) == (60, 60, 1)
+    assert snapshot.capped is True  # there was more in those days than it reads
     inbox_calls = [r for r in ms.to("graph.microsoft.com") if "/inbox/" in r.url.path]
     assert len(inbox_calls) == 2
     first = inbox_calls[0]
@@ -279,6 +282,24 @@ def test_read_asks_graph_for_recent_mail_and_follows_its_pages(mail_cfg, ms):
     assert first.headers["Prefer"] == 'IdType="ImmutableId"'
     sent_call = next(r for r in ms.to("graph.microsoft.com") if "/sentitems/" in r.url.path)
     assert sent_call.url.params["$select"] == "conversationId,sentDateTime"
+
+
+def test_read_says_when_it_got_everything(mail_cfg, ms):
+    ms.inbox = [message(n, hours_ago=n) for n in range(1, 121)]
+    snapshot = outlook.read(mail_cfg.brief.mail, outlook._client(), ACCESS, MORNING)  # the default reads 200
+    assert (snapshot.messages, snapshot.capped) == (120, False)
+    ms.inbox = ms.inbox[:50]  # exactly one full page, and nothing after it
+    mail_cfg.brief.mail.max_messages = 50
+    assert outlook.read(mail_cfg.brief.mail, outlook._client(), ACCESS, MORNING).capped is False
+
+
+def test_a_build_that_hits_the_limit_says_so(signed_in, ms, fake_ollama):
+    ms.inbox = [message(n, hours_ago=n, preview="[NOISE]") for n in range(1, 8)]
+    signed_in.brief.mail.max_messages = 5
+    _, run = build(signed_in)
+    mail = next(s for s in run["sources"] if s["name"] == "mail")
+    assert mail["note"] == ("Only the newest 5 messages from the last 14 days were read. "
+                            "Raise brief.mail.max_messages to read them all.")
 
 
 def test_the_access_token_only_goes_to_graph(mail_cfg, ms):
@@ -563,6 +584,8 @@ def test_connect_outlook_signs_in_saves_and_prints_only_counts(mail_cfg, ms, des
     assert "It's on the clipboard too, so you can paste it there. It works for 15 minutes." in out
     assert "The code again: ABCD-EFGH." in out
     assert "The inbox has 3 messages from the last 14 days, in 2 conversations." in out
+    assert "Only the newest" not in out  # everything in those days was read
+    assert "sent by you in the same days: 1" in out
     assert "answered by you after their last message: 1" in out
     assert "last message flagged complete: 1" in out
     assert "Focused Inbox: 1 focused, 1 other, 0 not marked" in out
@@ -570,6 +593,29 @@ def test_connect_outlook_signs_in_saves_and_prints_only_counts(mail_cfg, ms, des
     assert "The brief would ask the local model about 0 of them." in out
     for private in ("Secret offer", "Priya", "dana@", "DEVICE-CODE", "RRRR", ACCESS):
         assert private not in out
+
+
+def test_connect_outlook_again_uses_the_saved_sign_in_and_asks_for_no_code(signed_in, ms, desk, capsys):
+    ms.inbox = [message(n, hours_ago=n) for n in range(1, 8)]
+    signed_in.brief.mail.max_messages = 5
+    assert brief_cli.run(command("connect", "outlook"), signed_in) == 0
+
+    assert desk.events == []  # no code, no clipboard, no browser
+    assert [r.url.path.rsplit("/", 1)[-1] for r in ms.to("login.microsoftonline.com")] == ["token"]
+    assert credentials.get(outlook.REFRESH_TOKEN) == RENEWED
+    out = capsys.readouterr().out
+    assert out.startswith("Already signed in, so no code is needed.")
+    assert "The inbox has 5 messages" in out
+    assert "  Only the newest 5 messages from the last 14 days were read." in out
+
+
+def test_connect_outlook_signs_in_again_when_the_saved_sign_in_stopped_working(signed_in, ms, desk, capsys):
+    ms.refresh_error = {"error": "invalid_grant"}
+    assert brief_cli.run(command("connect", "outlook"), signed_in) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("The saved sign-in no longer works, so here is a new code.")
+    assert "Signed in, and saved the sign-in" in out
+    assert credentials.get(outlook.REFRESH_TOKEN) == LONG_REFRESH  # the one the new sign-in gave
 
 
 def test_connect_outlook_reports_a_declined_sign_in_and_saves_nothing(mail_cfg, ms, desk, capsys):

@@ -16,7 +16,7 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
 - **Its own window on Windows.** `switchboard.cmd` opens the dashboard as a desktop app, with a tray icon and its own name and icon on the taskbar, and no terminal left open. It is the same local server in one Python process, with no Electron and no bundled exe.
-- **Tested and checked.** 233 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
+- **Tested and checked.** 237 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
 
 ## Architecture
 
@@ -131,9 +131,10 @@ python -m switchboard brief status           # the last build, as counts and not
 
 How mail gets there:
 
-- **Read-only, through your own app registration.** Switchboard signs in to Microsoft Graph with the device code flow, as a public client with no secret, and asks only for `Mail.Read`, which can't send, delete or change anything. The sign-in is kept in the credential store and renewed on every build. `connect` walks you through the registration and prints only the mailbox's shape: how many messages and conversations, how many you've answered.
+- **Read-only, through your own app registration.** Switchboard signs in to Microsoft Graph with the device code flow, as a public client with no secret, and asks only for `Mail.Read`, which can't send, delete or change anything. The sign-in is kept in the credential store and renewed on every build. `connect` walks you through the registration and prints only the mailbox's shape: how many messages and conversations, how many you've answered. Run again, it reuses the saved sign-in to check the mailbox without a new code.
 - **Handled mail leaves the list on its own.** A conversation where you replied after its last message is done, and so is one you flagged complete. A new message in it opens it again.
 - **Sorted by a local model and nothing else.** Each new message goes to Ollama once, with its sender, subject and the 255-character preview Graph provides, fenced off as data. The answer has to fit a fixed JSON schema: reply, a task or nothing to do, whether a model could draft the reply, a category, a one-line summary and any deadline the mail names. Every field is checked, links are stripped from what the model writes, and the result is shown as plain text, so a message written to fool the model can at most mislabel itself. Mail the model says needs nothing stays off the list.
+- **Each message is sorted once,** so a build reads up to 200 messages, newest first, and says so when there were more in those days. Only the first build takes a while.
 - **If the model is down,** mail Outlook files under Focused is listed unsorted, the rest waits, and the next build tries again.
 - **Long sign-ins fit.** Windows Credential Manager refuses a value over 1,280 characters, and a Microsoft refresh token can be longer, so a long secret is stored in parts.
 
