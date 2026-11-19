@@ -1,4 +1,4 @@
-"""Loads and validates config.yaml."""
+"""Loads and validates config.yaml, with config.local.yaml laid over it."""
 
 from __future__ import annotations
 
@@ -7,10 +7,11 @@ import re
 from datetime import time as dt_time
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from types import UnionType
+from typing import Literal, Union, get_args, get_origin
 
 import yaml
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,19 +29,26 @@ def clamp_effort(level: str, floor: str | None = None, ceiling: str | None = Non
     return EFFORTS[i]
 
 
-class ServerCfg(BaseModel):
+class Settings(BaseModel):
+    """Every part of the config is one of these. A key that isn't a field stops the load, so a setting
+    that is misspelled or in the wrong place is reported instead of quietly dropped."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ServerCfg(Settings):
     host: str = "127.0.0.1"
     port: int = 8787
     data_dir: str = "data"
 
 
-class OllamaCfg(BaseModel):
+class OllamaCfg(Settings):
     base_url: str = "http://127.0.0.1:11434"
     timeout_s: float = 600
     keep_alive: str = "30m"
 
 
-class ClaudeCfg(BaseModel):
+class ClaudeCfg(Settings):
     command: str = "claude"
     timeout_s: float = 300
     max_turns: int = 3
@@ -56,7 +64,7 @@ class ClaudeCfg(BaseModel):
     sync_interval_s: int = 60
 
 
-class ModelCfg(BaseModel):
+class ModelCfg(Settings):
     provider: Literal["ollama", "claude_cli"]
     model: str
     label: str | None = None
@@ -68,7 +76,7 @@ class ModelCfg(BaseModel):
     max_effort: EffortLevel | None = None
 
 
-class RuleCfg(BaseModel):
+class RuleCfg(Settings):
     name: str
     model: str
     task_types: list[str] | None = None
@@ -96,13 +104,13 @@ def _default_effort_map() -> dict[int, str]:
     return {1: "low", 2: "low", 3: "medium", 4: "high", 5: "xhigh"}
 
 
-class EffortCfg(BaseModel):
+class EffortCfg(Settings):
     # Reasoning depth (1-5, rated by the classifier) -> effort level.
     # A missing level means "don't set one", so Claude Code uses your own /effort setting.
     by_reasoning: dict[int, EffortLevel] = Field(default_factory=_default_effort_map)
 
 
-class ClassifierCfg(BaseModel):
+class ClassifierCfg(Settings):
     model: str
     use_loaded_model: bool = True
     think: bool | None = False
@@ -110,7 +118,7 @@ class ClassifierCfg(BaseModel):
     max_prompt_chars: int = 4000
 
 
-class LearnCfg(BaseModel):
+class LearnCfg(Settings):
     """Move a prompt up or down a ladder of models based on how similar past prompts were rated."""
     enabled: bool = True
     ladder: list[str] = Field(default_factory=list)  # cheapest first. Empty turns learning off.
@@ -122,7 +130,7 @@ class LearnCfg(BaseModel):
     follow_up_weight: float = Field(0.5, ge=0, le=1)
 
 
-class RoutingCfg(BaseModel):
+class RoutingCfg(Settings):
     classifier: ClassifierCfg
     prefer_loaded_local: bool = True
     fallback_order: list[str] = Field(default_factory=list)
@@ -131,7 +139,7 @@ class RoutingCfg(BaseModel):
     rules: list[RuleCfg]
 
 
-class PriceCfg(BaseModel):
+class PriceCfg(Settings):
     match: str
     input: float
     output: float
@@ -139,19 +147,19 @@ class PriceCfg(BaseModel):
     cache_write: float = 0.0
 
 
-class PricingCfg(BaseModel):
+class PricingCfg(Settings):
     reference_model: str | None = "sonnet"
     models: dict[str, PriceCfg] = Field(default_factory=dict)
 
 
-class MemoryCfg(BaseModel):
+class MemoryCfg(Settings):
     """Excerpts from other chats added to a message when a chat has memory turned on."""
     max_items: int = 4
     min_score: float = 0.55
     max_chars: int = 6000
 
 
-class QdrantCfg(BaseModel):
+class QdrantCfg(Settings):
     url: str | None = "http://127.0.0.1:6333"  # a Qdrant server, or ":memory:" for a throwaway in-process one
     path: str | None = None  # embedded mode instead of a server: stored in this folder (relative to the repo)
     api_key: str | None = None
@@ -159,7 +167,7 @@ class QdrantCfg(BaseModel):
     timeout_s: float = 10
 
 
-class EmbeddingCfg(BaseModel):
+class EmbeddingCfg(Settings):
     model: str = "qwen3-embedding:0.6b"  # any Ollama embedding model
     max_chars: int = 8000  # text embedded per turn (prompt plus answer)
     # Qwen3-Embedding works best with "Instruct: ...\nQuery: ..." on the query side.
@@ -169,7 +177,7 @@ class EmbeddingCfg(BaseModel):
     timeout_s: float = 60
 
 
-class IndexCfg(BaseModel):
+class IndexCfg(Settings):
     enabled: bool = True
     qdrant: QdrantCfg = Field(default_factory=QdrantCfg)
     embedding: EmbeddingCfg = Field(default_factory=EmbeddingCfg)
@@ -178,7 +186,7 @@ class IndexCfg(BaseModel):
     search_min_score: float = 0.45  # chat search by meaning ignores weaker matches
 
 
-class ChatCfg(BaseModel):
+class ChatCfg(Settings):
     # Characters of earlier conversation sent with each new message, per provider. The oldest
     # turns are left out first. Keep the Ollama budget well under the num_ctx you give local models
     # (roughly 3.5 characters per token).
@@ -188,14 +196,14 @@ class ChatCfg(BaseModel):
     memory: MemoryCfg = Field(default_factory=MemoryCfg)
 
 
-class BriefCourseworkCfg(BaseModel):
+class BriefCourseworkCfg(Settings):
     """Coursework from a Canvas calendar feed. The feed link itself is a secret and isn't a setting."""
     lookahead_days: int = Field(7, ge=1, le=90)  # how far ahead something due is listed
     overdue_days: int = Field(2, ge=0, le=30)  # how long it stays listed after it was due
     include_events: bool = False  # calendar events as well as assignments
 
 
-class BriefMailCfg(BaseModel):
+class BriefMailCfg(Settings):
     """Mail from an Outlook inbox, read through Microsoft Graph. The sign-in itself is a secret and
     isn't a setting."""
     client_id: str | None = None  # the Application (client) ID of your own Microsoft Entra app registration
@@ -210,7 +218,7 @@ class BriefMailCfg(BaseModel):
     writing_notes: str | None = Field(None, max_length=2000)
 
 
-class BriefCfg(BaseModel):
+class BriefCfg(Settings):
     """The morning brief: a daily list of what needs doing, shown on the Today page."""
     enabled: bool = False
     # Local time from which the day's brief is built, while Switchboard runs. Started later than
@@ -227,7 +235,7 @@ class BriefCfg(BaseModel):
             value = f"{value // 60:02d}:{value % 60:02d}"
         text = str(value).strip()
         if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", text):
-            raise ValueError("brief.build_after has to be a time of day, such as \"06:30\"")
+            raise ValueError("has to be a time of day, such as \"06:30\"")  # the setting's path goes in front
         hours, minutes = text.split(":")
         return f"{int(hours):02d}:{minutes}"
 
@@ -237,7 +245,7 @@ class BriefCfg(BaseModel):
         return dt_time(int(hours), int(minutes))
 
 
-class Config(BaseModel):
+class Config(Settings):
     server: ServerCfg = Field(default_factory=ServerCfg)
     ollama: OllamaCfg = Field(default_factory=OllamaCfg)
     claude: ClaudeCfg = Field(default_factory=ClaudeCfg)
@@ -282,7 +290,8 @@ class Config(BaseModel):
         if self.pricing.reference_model and self.pricing.reference_model not in self.pricing.models:
             problems.append(f"pricing.reference_model '{self.pricing.reference_model}' is not in pricing.models")
         if problems:
-            raise ValueError("config.yaml problems:\n  - " + "\n  - ".join(problems))
+            # Checked after config.local.yaml is laid over config.yaml, so either file may be at fault.
+            raise ValueError("Problems in the config:\n  - " + "\n  - ".join(problems))
         return self
 
     # Derived paths -------------------------------------------------------
@@ -346,21 +355,168 @@ def merge(base: dict, over: dict) -> dict:
     return out
 
 
+class ConfigError(ValueError):
+    """The config didn't load. The message names the file and the setting, in words that read as well
+    in the app's dialog as in a terminal."""
+
+
+# Stand-ins in a suggested path, for a key of a mapping (a model under models) and an entry of a list
+# (a rule under routing.rules).
+ANY_KEY = "<name>"
+ANY_ITEM = "[n]"
+
+
+def _dotted(path: tuple) -> str:
+    """A setting's path as the docs write it, such as brief.mail.client_id or routing.rules[2].model."""
+    text = ""
+    for part in path:
+        if isinstance(part, int):
+            text += f"[{part}]"
+        elif part == ANY_ITEM:
+            text += part
+        else:
+            text += f".{part}" if text else str(part)
+    return text
+
+
+def _is_settings(kind) -> bool:
+    return isinstance(kind, type) and issubclass(kind, Settings)
+
+
+def _shape(annotation) -> tuple[str, type[Settings] | None, tuple]:
+    """What a field takes in YAML (a mapping, a list or a single value), the settings inside it if it
+    holds any, and the step in a path from the field down to those."""
+    if get_origin(annotation) in (Union, UnionType):
+        options = [arg for arg in get_args(annotation) if arg is not type(None)]
+        if len(options) == 1:
+            annotation = options[0]
+    container = get_origin(annotation) or annotation
+    args = get_args(annotation)
+    if container is dict:
+        inner = args[1] if args else None
+        return "mapping", inner if _is_settings(inner) else None, (ANY_KEY,)
+    if container is list:
+        inner = args[0] if args else None
+        return "list", inner if _is_settings(inner) else None, (ANY_ITEM,)
+    if _is_settings(annotation):
+        return "mapping", annotation, ()
+    return "value", None, ()
+
+
+def _homes(key: str, given) -> list[tuple]:
+    """Each place a setting called `key` exists, as the path to the part of the config that holds it,
+    nearest the top first. Only settings that take what was given count, so a mapping is only sent to
+    a section. Nothing given (a key with no value) fits anything."""
+    kind = "mapping" if isinstance(given, dict) else "list" if isinstance(given, list) else "value"
+    homes = []
+
+    def walk(model: type[Settings], path: tuple) -> None:
+        for name, field in model.model_fields.items():
+            takes, inner, step = _shape(field.annotation)
+            if name == key and (given is None or takes == kind):
+                homes.append(path)
+            if inner is not None:
+                walk(inner, (*path, name, *step))
+
+    walk(Config, ())
+    return sorted(homes, key=len)
+
+
+def _either(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " or " + items[-1]
+
+
+def _belongs(key: str, given) -> str:
+    """Where a setting that was put in the wrong place goes, as a sentence. Empty when it exists nowhere,
+    or in so many places that a list wouldn't help."""
+    homes = _homes(key, given)
+    if not homes or len(homes) > 3:
+        return ""
+    if homes == [()]:
+        return "It goes at the top level."
+    if len(homes) == 1:
+        return f"It goes under {_dotted(homes[0])}, as {_dotted((*homes[0], key))}."
+    places = ["at the top level"] if () in homes else []
+    sections = [_dotted(home) for home in homes if home]
+    if sections:
+        places.append("under " + _either(sections))
+    return "It goes " + " or ".join(places) + "."
+
+
+def _within(raw, path: tuple) -> bool:
+    """Whether a file's own settings reach all the way to `path`."""
+    node = raw
+    for part in path:
+        if not isinstance(node, (dict, list)):
+            return False
+        try:
+            node = node[part]
+        except (KeyError, IndexError, TypeError):  # TypeError: a key where the file has a list
+            return False
+    return bool(path)
+
+
+def _problems(error: ValidationError, base: str, local: str, own: dict) -> list[tuple[str | None, str]]:
+    """Each problem pydantic found, as the file it is in and a sentence about it. A setting the local
+    file names came from that file, and anything else from the tracked one. `own` is what the local
+    file says by itself, before the merge."""
+    found = []
+    for err in error.errors(include_url=False):
+        path = tuple(part for part in err["loc"] if part != "[key]")  # pydantic's mark for a bad mapping key
+        reason = str((err.get("ctx") or {}).get("error") or err["msg"])  # a validator's own words, if it has them
+        if not path:  # a check across settings, such as a rule that names a model that doesn't exist
+            found.append((None, reason))
+            continue
+        name, source = _dotted(path), path
+        if err["type"] == "extra_forbidden":
+            text = f"{name} isn't a setting" + ("" if len(path) > 1 else " at the top level") + "."
+            hint = _belongs(path[-1], err.get("input"))
+            if hint:
+                text += " " + hint
+        elif err["type"] == "missing":
+            text, source = f"{name} is missing", path[:-1]
+        elif reason[:1].islower():  # written to follow the setting's name, such as "has to be a time of day"
+            text = f"{name} {reason}"
+        else:
+            text = f"{name}: {reason}"
+        if not text.endswith((".", "?", "!", '"')):
+            text += "."
+        found.append((local if _within(own, source) else base, text))
+    return found
+
+
+def _describe(problems: list[tuple[str | None, str]]) -> str:
+    """One sentence for one problem. Several are listed under the file they are in."""
+    if len(problems) == 1:
+        file, text = problems[0]
+        return f"In {file}, {text}" if file else text
+    lines = [text for file, text in problems if file is None]
+    for file in dict.fromkeys(file for file, _ in problems if file):
+        lines.append(f"In {file}:")
+        lines += [f"  - {text}" for where, text in problems if where == file]
+    return "\n".join(lines)
+
+
 def _read_yaml(path: Path) -> dict:
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     if not isinstance(raw, dict):
-        raise ValueError(f"{path.name} has to be a mapping of settings, not {type(raw).__name__}")
+        raise ConfigError(f"{path.name} has to be a mapping of settings, not {type(raw).__name__}")
     return raw
 
 
 def load_config(path: Path | None = None) -> Config:
+    """The config at `path`, with config.local.yaml from the same folder laid over it. Raises
+    ConfigError for a setting it doesn't know, or one that doesn't check out."""
     path = path or config_path()
     raw = _read_yaml(path)
     local = local_config_path(path)
-    if local.is_file():
-        raw = merge(raw, _read_yaml(local))
-    cfg = Config.model_validate(raw)
+    own = _read_yaml(local) if local.is_file() else {}
+    try:
+        cfg = Config.model_validate(merge(raw, own))
+    except ValidationError as e:
+        # from None: pydantic's own report repeats the values it was given, and they may be personal.
+        raise ConfigError(_describe(_problems(e, path.name, local.name, own))) from None
     cfg.data_path.mkdir(parents=True, exist_ok=True)
     cfg.claude_workdir.mkdir(parents=True, exist_ok=True)
     return cfg

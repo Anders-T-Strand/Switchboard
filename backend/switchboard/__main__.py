@@ -89,9 +89,13 @@ def main(argv: list[str] | None = None) -> int:
 
         return desktop.run(args)
 
-    from .config import get_config
+    from .config import ConfigError, get_config
 
-    cfg = get_config()
+    try:
+        cfg = get_config()
+    except ConfigError as e:  # what's wrong and where, without a traceback in front of it
+        print(f"Switchboard's config didn't load.\n\n{e}", file=sys.stderr)
+        return 1
 
     if args.cmd in (None, "serve"):
         import uvicorn
