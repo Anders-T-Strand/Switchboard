@@ -182,9 +182,9 @@ Rules that follow from the code and from the repo being public:
 - **Notifications are wired but not yet seen on a real desktop:** `Brief.on_built` calls `Shell.brief_built`, which notifies for builds started by the schedule or the tray, with `ready_message` (counts only). pystray's balloon has only run against a fake icon, so look at what Windows puts in the header. It may say Python, as the taskbar did before the window got its relaunch properties, and then `APP_ID` needs registering with Windows.
 - **Start with Windows** is a shortcut in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` that runs `start.ps1 app --hidden` in a hidden PowerShell, made through `WScript.Shell` with every value passed in the environment. `startup.py` does it, from the tray's check box only.
 
-### Read aloud (built)
+### Read aloud (done)
 
-A speaker button on each Console answer, through ElevenLabs. Tested against a fake ElevenLabs only. Not yet tried with a real key: the owner saves it with `speech connect` and tries the button. Then look at the first audio times on the Models page, how the cleanup reads real answers, and whether the stream plays in the app window (WebView2) as it does in a browser.
+A speaker button on each Console answer, through ElevenLabs. Tried with the owner's key in the app, and it reads answers out well. The first audio times are on the Models page and in `speech status`.
 
 ### 2. Give the Console's models some context
 
