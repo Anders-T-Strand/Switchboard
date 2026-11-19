@@ -12,6 +12,7 @@ from .index import TurnIndex, build_memory_block
 from .pricing import cost_usd, find_price, reference_cost
 from .providers import ClaudeCLI, OllamaClient, ProviderError
 from .router import Router, Turn
+from .speech import Speech
 
 TASK_STATUSES = ("todo", "doing", "done")
 
@@ -34,6 +35,7 @@ class Service:
         self.router = Router(cfg, self.ollama, self.claude, self.index)
         # The morning brief keeps to itself: its own tables, and never the router above.
         self.brief = Brief(cfg, load_sources(cfg, self.ollama), create_task=self.create_task)
+        self.speech = Speech(cfg)  # read aloud, through ElevenLabs
 
     # Prompts -------------------------------------------------------------------
 
@@ -319,10 +321,13 @@ class Service:
         return self.update_conversation(cid, title=title)
 
     def delete_conversation(self, cid: int) -> None:
-        """Deletes the chat and its turns, so they also leave the request log and stats."""
+        """Deletes the chat and its turns, so they also leave the request log and stats, and the
+        clips its answers were read aloud into."""
+        clips = self.speech.detach(cid)
         with connect() as conn:
             if conn.execute("DELETE FROM conversations WHERE id = ?", (cid,)).rowcount == 0:
                 raise NotFound(f"chat {cid} not found")
+        self.speech.drop_unused(clips)
         if self.index is not None:
             self.index.delete_conversation(cid)
 
@@ -525,6 +530,7 @@ class Service:
             "sync": dict(claude_logs.last_sync),
             "models": models,
             "index": self.index.status() if self.index is not None else {"enabled": False},
+            "speech": self.speech.state(),
         }
 
     def rebuild_index(self) -> dict:
