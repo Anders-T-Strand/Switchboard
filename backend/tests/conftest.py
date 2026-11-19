@@ -20,6 +20,7 @@ from switchboard import credentials
 from switchboard.config import Config
 from switchboard.db import init_db
 from switchboard.providers.ollama import OllamaClient
+from switchboard.speech import player as speech_player
 
 
 class FakeKeyring:
@@ -53,6 +54,16 @@ def vault(monkeypatch) -> FakeKeyring:
         if name.startswith("SWITCHBOARD_") and name != "SWITCHBOARD_CONFIG":
             monkeypatch.delenv(name)  # a secret set in the environment wins over the store
     return fake
+
+
+@pytest.fixture(autouse=True)
+def no_elevenlabs(monkeypatch) -> None:
+    """Read aloud can't reach the real ElevenLabs from any test. test_speech.py puts a fake in its place."""
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"a test tried to reach {request.url.host}")
+
+    monkeypatch.setattr(speech_player, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(refuse)))
 
 
 FAKE_CLAUDE = textwrap.dedent(

@@ -1,14 +1,15 @@
 import { useState } from "react";
 import { api } from "../api";
 import { ErrorNote, Light, ModelTag, Panel } from "../components/bits";
-import { capitalize, effortLabel, int, price, when } from "../format";
-import { useApp } from "../hooks";
+import { capitalize, effortLabel, int, price, seconds, when } from "../format";
+import { useApi, useApp } from "../hooks";
 
 export function Models({ onSynced }: { onSynced: () => void }) {
   const { config, status, label } = useApp();
   const [syncing, setSyncing] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const speech = useApi(() => api.speechStats(), [], 30_000);
 
   if (!config || !status) return <p className="muted">Loading…</p>;
   const r = config.routing;
@@ -189,6 +190,68 @@ export function Models({ onSynced }: { onSynced: () => void }) {
               </div>
             </dl>
           </Panel>
+
+          {speech.data && (status.speech?.enabled || speech.data.plays > 0) && (
+            <Panel title="Read aloud" sub="ElevenLabs text to speech, from the speaker button on Console answers">
+              <dl className="facts">
+                <div>
+                  <dt>ElevenLabs</dt>
+                  <dd>
+                    <Light on={status.speech.key_saved}>{status.speech.key_saved ? "Key saved" : "No key saved"}</Light>
+                    {!status.speech.key_saved && (
+                      <span className="muted block">
+                        Save one with <code>python -m switchboard speech connect</code>.
+                      </span>
+                    )}
+                    <span className="muted block">
+                      Voice <code>{speech.data.voice_id}</code>, model <code>{speech.data.model_id}</code>
+                    </span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>First audio</dt>
+                  <dd>
+                    {speech.data.first_audio_ms.elevenlabs_plays
+                      ? `${seconds(speech.data.first_audio_ms.elevenlabs)} median from ElevenLabs, over ${int(speech.data.first_audio_ms.elevenlabs_plays)} ${speech.data.first_audio_ms.elevenlabs_plays === 1 ? "play" : "plays"}`
+                      : "No plays from ElevenLabs yet"}
+                    <span className="muted block">
+                      Measured on the server, from the request reaching Switchboard to the first audio.
+                      {speech.data.first_audio_ms.saved_plays ? ` ${seconds(speech.data.first_audio_ms.saved)} from a saved clip.` : ""}
+                    </span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Whole clip</dt>
+                  <dd>
+                    {speech.data.total_ms.elevenlabs === null ? "–" : `${seconds(speech.data.total_ms.elevenlabs)} median, start to last byte`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Plays</dt>
+                  <dd>
+                    {int(speech.data.plays)}, {int(speech.data.from_clips)} from saved clips
+                    {speech.data.stopped ? `, ${int(speech.data.stopped)} stopped` : ""}
+                    {speech.data.errors ? `, ${int(speech.data.errors)} failed` : ""}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Characters sent</dt>
+                  <dd>
+                    {int(speech.data.chars_sent)}
+                    <span className="muted block">
+                      In plays ElevenLabs answered, since it charges by the character. A saved clip sends nothing.
+                    </span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Saved clips</dt>
+                  <dd>
+                    {int(speech.data.clips)}, {(speech.data.clip_bytes / 1_000_000).toFixed(1)} MB
+                  </dd>
+                </div>
+              </dl>
+            </Panel>
+          )}
 
           {status.index?.enabled && (
             <Panel

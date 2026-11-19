@@ -10,6 +10,7 @@ A self-hosted dashboard that sends each prompt to the best-suited model, picks h
 
 - **Local models:** Qwen through Ollama. `qwen-moe` (`qwen3.6:35b-a3b`, MoE) is the default and `qwen-dense` (`qwen3.8:27b`) is the other.
 - **Claude:** Haiku, Sonnet and Opus through `claude -p` on a Claude Pro login. No API key is involved. The runner strips `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the environment.
+- **Read aloud:** a speaker button on Console answers reads them with ElevenLabs text to speech. It is off by default, and its API key is the owner's, in the credential store.
 - **Starting it:** `switchboard.cmd` runs `start.ps1 app`. That makes the venv, reinstalls Python packages when `requirements.txt` or `requirements-desktop.txt` changes, rebuilds the frontend when its source changes and starts Qdrant in Docker if needed. Then it hands over to `pythonw -m switchboard app` and exits, so no terminal stays open. The app is the server, a window and a tray icon in one process, on http://127.0.0.1:8787. With arguments (`.\switchboard serve`, `.\switchboard ask "..."`) the launcher runs that command in the terminal with `--open`, as it always did. `start.sh` does the same setup on macOS and Linux and opens the browser.
 
 ## Commands
@@ -32,6 +33,10 @@ cd backend
 # made-up items for working on the Today page. Only runs on a config with a data folder of its own
 $env:SWITCHBOARD_CONFIG = "C:\path\to\a\copy-of-config.yaml"
 .\.venv\Scripts\python -m switchboard brief demo
+
+# read aloud. status prints counts and timings, nothing from any answer
+.\.venv\Scripts\python -m switchboard speech status
+.\.venv\Scripts\python -m switchboard speech connect   # asks for the ElevenLabs key at a hidden prompt. The owner runs this, never an assistant
 
 # frontend
 cd frontend
@@ -72,6 +77,8 @@ npm run build    # strict type check, then the build
 
 **Tracking.** Tokens, latency and cost per request. Cost is what the call would have cost at API rates, plus what answering locally saved. Claude Code usage is read from the session logs under `~/.claude`, and calls made from `data/claude-workdir` are tagged as the router's. Tasks are a To do, In progress and Done board. Prompts are tagged with a task from the Console or with `ask --task ID`, and each card totals its prompts, tokens and cost. Nothing moves cards automatically.
 
+**Read aloud.** `GET /api/requests/{id}/speech` turns the answer into plain sentences (`speech/text.py`), sends them to ElevenLabs' streaming endpoint with the key from the credential store, and passes the MP3 on as it arrives. `Speech.open` waits for the first chunk before the response starts, so an error is still JSON and the time to first audio goes out in the `X-Speech-First-Audio-Ms` header. Every play is a row in `speech`, with counts and timings and no text. A clip that played to the end is saved under `data/speech`, named by a hash of the text, voice, model and format, so a replay sends nothing. The page plays the stream with Media Source Extensions (`frontend/src/speech.ts`) and falls back to fetching the whole clip.
+
 ## Code map
 
 ```
@@ -96,11 +103,13 @@ backend/switchboard/
                    with a local model), drafts.py (writes replies with it), demo.py, cli.py
     sources/       outlook.py (Microsoft sign-in and Graph), ical.py (reads a calendar feed), canvas_feed.py (coursework)
   credentials.py   secrets in the operating system's credential store through keyring, in parts when long, with an env var override
-  __main__.py      CLI: serve (--open), app (--hidden, --devtools), ask (--model, --effort, --task, --chat ID|last, --json), brief (build, status, demo, connect, disconnect), sync
+  speech/          read aloud: text.py (Markdown into sentences), player.py (the ElevenLabs stream, saved clips, the play log), cli.py
+  __main__.py      CLI: serve (--open), app (--hidden, --devtools), ask (--model, --effort, --task, --chat ID|last, --json), brief (build, status, demo, connect, disconnect), speech (connect, forget, status), sync
 backend/tests/     pytest with the fakes described above
 frontend/src/      React 19 + TypeScript (strict) + Vite
   pages/           Today, Overview, Console, Requests, Tasks, Models
   components/      RouteSteps ("How it was routed"), PatchBay, StackedColumns, bits
+  speech.ts        the read aloud player: one answer at a time, streamed with Media Source Extensions
   styles.css       all styling, with the palette variables at the top
 ```
 
@@ -112,7 +121,7 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 - **The app's own Claude calls and this file:** `data/claude-workdir` is inside the repo, so `claude -p` would read this file, `CLAUDE.local.md` and Claude Code's auto memory for the repo on every routed call. `claude.skip_project_context` (on by default) keeps all three out by passing `--setting-sources user` and setting `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. `~/.claude/CLAUDE.md` still loads.
 - **Tests must never reach a real `claude`:** a dev machine has one installed, and the runner looks in the usual install folders when the command isn't on PATH. A test that makes the CLI unfindable has to patch `install_locations` as well, or it makes a real call.
 - **Console CSS:** the Console fills the window on desktop (`.main.main-fill`). The grid needs `grid-template-rows: minmax(0, 1fr)`, or the thread grows instead of scrolling.
-- **A second instance needs its own config:** never start one on the default `config.yaml` while testing. It would share `data/` and the Qdrant collection, where point ids are request ids, so a fresh database overwrites real vectors. Point `SWITCHBOARD_CONFIG` at a copy with another `server.port` and either `index.enabled: false` or another `index.qdrant.collection`. To keep test prompts off Claude and the GPU, leave only a local model in that copy and aim `ollama.base_url` at a stub. It still shares this machine's credential store, so set `SWITCHBOARD_NO_CREDENTIAL_STORE=1` for it, or it signs in as the owner and builds a brief from real mail and coursework.
+- **A second instance needs its own config:** never start one on the default `config.yaml` while testing. It would share `data/` and the Qdrant collection, where point ids are request ids, so a fresh database overwrites real vectors. Point `SWITCHBOARD_CONFIG` at a copy with another `server.port` and either `index.enabled: false` or another `index.qdrant.collection`. To keep test prompts off Claude and the GPU, leave only a local model in that copy and aim `ollama.base_url` at a stub. It still shares this machine's credential store, so set `SWITCHBOARD_NO_CREDENTIAL_STORE=1` for it, or it signs in as the owner and builds a brief from real mail and coursework, and with speech on it reads aloud on the owner's ElevenLabs key.
 - **The app has no console:** under `pythonw`, `sys.stdout` and `sys.stderr` are None, so `print` does nothing and a traceback goes nowhere. `desktop.setup_logging` sends logging and stray output to `data/logs/switchboard.log`, and anything that stops the app has to end in `desktop.alert`, which is a dialog there.
 - **GUI imports stay inside functions in `desktop.py`:** CI installs `requirements.txt` only. A module-level import of `webview`, `pystray` or `PIL` breaks the suite everywhere, and a test checks for it. The window and the tray icon are faked in tests, so what only a display can show (`run_gui` and the Windows helpers under it) has to be checked by hand.
 - **Closing is not quitting:** the X button hides the window and the server runs on until Quit in the tray menu. On Windows only a close the user asked for is cancelled (the X, Alt+F4, Close window on the taskbar). A plain `WM_CLOSE`, which is what `taskkill` and Task Manager send, and Windows shutting down close it for real, and cancelling those would block shutdown.
@@ -137,6 +146,12 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 - **YAML reads an unquoted `6:30` as the number 390** (base 60). `brief.build_after` takes such a number back to the time it was meant as, and the config writes it in quotes anyway. Note that `06:30` with its leading zero stays a string.
 - **Something already handled is never stored:** a conversation answered before any build listed it is skipped by `save_found`, so an old reply doesn't turn up under Closed today. An item that was listed and then handled closes at the time of the reply.
 - **What a real Canvas feed looks like:** checked against one through `brief connect canvas`, which prints the feed's shape with no titles and no link in it. Every UID is `event-assignment-<n>`, every title ends in `[course]` and every URL points back at the same Canvas, which are the three things the reader relies on. Dates come both as all-day dates and with a time. The events also carry `DTEND`, `DTSTAMP`, `SEQUENCE`, `CLASS` and an HTML description in `X-ALT-DESC`, and the reader keeps none of them. To check a change against the real feed, ask the owner to run `brief connect canvas` again and paste what it prints. Never fetch the feed yourself.
+
+- **Tests must never reach ElevenLabs:** an autouse fixture in `conftest.py` puts a transport that refuses every request in `speech.player._client`. `test_speech.py` puts its fake there with the `eleven` fixture, so a test that plays audio asks for that fixture.
+- **The ElevenLabs key is the owner's:** `speech connect` saves it as `elevenlabs_api_key`, and the owner runs it in their own terminal. Never ask for the key and never run `speech connect`. The key goes only in the `xi-api-key` header to api.elevenlabs.io, and it is taken out of anything ElevenLabs says back before that reaches the page or the database.
+- **Read aloud sends an answer's text to ElevenLabs:** only when the button is pressed, and only a Console answer. Brief items are never requests, so they can't be read aloud.
+- **After the first chunk, a play can't report an error:** the response has started. A stream that breaks off is recorded in `speech` and simply ends. A stop reaches `Play.chunks` as a cancellation or as the generator being closed, so its cleanup is in `finally`, with the one await in it shielded.
+- **A clip is kept only when it played to the end:** the audio waits in memory and `Speech.keep` writes it beside its name and moves it into place. At startup `recover()` drops a `.part` file a crash left. A change to `speech/text.py` changes the text sent and so the clip names, so old clips are just not found again. They go when their chats are deleted.
 
 ## Next steps
 
@@ -166,6 +181,10 @@ Rules that follow from the code and from the repo being public:
 - **Schedule:** Switchboard only builds while it runs, so Start with Windows is what makes it daily. A build counts for the day when it started after `build_after` and went through, fully or in part. A failed one is retried after `RETRY` (30 minutes). For its first `OLLAMA_WAIT_S` (15 minutes) after startup, a due build waits for Ollama, which may still be starting at sign-in. `python -m switchboard brief` builds on demand, through the running server when there is one.
 - **Notifications are wired but not yet seen on a real desktop:** `Brief.on_built` calls `Shell.brief_built`, which notifies for builds started by the schedule or the tray, with `ready_message` (counts only). pystray's balloon has only run against a fake icon, so look at what Windows puts in the header. It may say Python, as the taskbar did before the window got its relaunch properties, and then `APP_ID` needs registering with Windows.
 - **Start with Windows** is a shortcut in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` that runs `start.ps1 app --hidden` in a hidden PowerShell, made through `WScript.Shell` with every value passed in the environment. `startup.py` does it, from the tray's check box only.
+
+### Read aloud (done)
+
+A speaker button on each Console answer, through ElevenLabs. Tried with the owner's key in the app, and it reads answers out well. The first audio times are on the Models page and in `speech status`.
 
 ### 2. Give the Console's models some context
 

@@ -295,6 +295,23 @@ export type Status = {
   sync: SyncState;
   models: ModelStatus[];
   index: IndexStatus;
+  /** Read aloud with ElevenLabs: on in config, and whether an API key is saved. */
+  speech: { enabled: boolean; key_saved: boolean };
+};
+
+/** Plays read aloud and how long they took. Counts and timings only. */
+export type SpeechStats = {
+  plays: number;
+  from_clips: number;
+  stopped: number;
+  errors: number;
+  chars_sent: number;
+  first_audio_ms: { elevenlabs: number | null; elevenlabs_plays: number; saved: number | null; saved_plays: number };
+  total_ms: { elevenlabs: number | null };
+  clips: number;
+  clip_bytes: number;
+  voice_id: string;
+  model_id: string;
 };
 
 export type IndexStatus = {
@@ -438,6 +455,8 @@ export const api = {
   updateTask: (id: number, body: Partial<Pick<Task, "title" | "notes" | "status">>) =>
     request<Task>(`/api/tasks/${id}`, { method: "PATCH", body: json(body) }),
   deleteTask: (id: number) => request<void>(`/api/tasks/${id}`, { method: "DELETE" }),
+
+  speechStats: () => request<SpeechStats>("/api/speech/stats"),
 
   brief: () => request<Brief>("/api/brief"),
   buildBrief: () => request<Brief>("/api/brief/run", { method: "POST" }),
