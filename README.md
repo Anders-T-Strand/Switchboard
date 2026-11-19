@@ -263,6 +263,8 @@ Everything lives in `config.yaml`. Restart Switchboard after editing it. With th
 
 Settings of your own that shouldn't be published go in `config.local.yaml`, next to it. That file has the same shape, overrides whatever it names, and git ignores it.
 
+A setting Switchboard doesn't know, in either file, stops it at startup instead of being ignored. The message names the file and the setting, and says where a setting belongs when it is only in the wrong place, such as a `mail:` section at the top level instead of under `brief:`.
+
 | Section | What it controls |
 |---|---|
 | `models` | Every model the router can use. `provider` is `ollama` or `claude_cli`. For Claude, `model` is the alias passed to `claude --model` and `max_effort` caps its effort. For Ollama, `think` pins thinking on or off. |
