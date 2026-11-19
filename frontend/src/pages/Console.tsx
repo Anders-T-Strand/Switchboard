@@ -1,10 +1,24 @@
-import { Check, ChevronDown, Copy, Pencil, Plus, RotateCcw, Search, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Copy,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Search,
+  Square,
+  ThumbsDown,
+  ThumbsUp,
+  Trash2,
+  Volume2,
+} from "lucide-react";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type Conversation, type RequestDetail, type RoutePlan } from "../api";
 import { effortText, fromDetail, fromPlan, RouteSteps, UsageLine } from "../components/RouteSteps";
 import { ErrorNote, Md, ModelTag } from "../components/bits";
-import { effortLabel, when } from "../format";
+import { effortLabel, seconds, when } from "../format";
 import { hashParam, useApi, useApp } from "../hooks";
+import { onSpeech, speak, stopSpeech } from "../speech";
 
 function chatIdFromHash(): number | null {
   const c = hashParam("c");
@@ -39,6 +53,9 @@ export function Console() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  // An answer stops being read aloud when its chat closes, or when the Console does.
+  useEffect(() => () => stopSpeech(), [chatId]);
 
   useEffect(() => {
     const t = window.setTimeout(() => setSearch(query.trim()), 250);
@@ -472,6 +489,7 @@ function Turn({ m, busy, onRate, onRetry }: {
                 <ThumbsDown size={15} aria-hidden />
               </IconButton>
               <CopyButton text={m.response ?? ""} />
+              <SpeakButton id={m.id} />
               {!m.rating && (m.implicit_rating === 1 || m.implicit_rating === -1) && (
                 <span
                   className={`follow-note ${m.implicit_rating === 1 ? "good" : "bad"}`}
@@ -502,16 +520,98 @@ function Turn({ m, busy, onRate, onRetry }: {
   );
 }
 
-function IconButton({ label, pressed, onClick, children }: {
+function IconButton({ label, title, pressed, disabled, onClick, children }: {
   label: string;
+  title?: string;
   pressed?: boolean;
+  disabled?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
   return (
-    <button type="button" className="icon-btn" aria-label={label} title={label} aria-pressed={pressed} onClick={onClick}>
+    <button
+      type="button"
+      className="icon-btn"
+      aria-label={label}
+      title={title ?? label}
+      aria-pressed={pressed}
+      disabled={disabled}
+      onClick={onClick}
+    >
       {children}
     </button>
+  );
+}
+
+/** Read the answer aloud with ElevenLabs. Hidden while read aloud is off, disabled until a key is saved. */
+function SpeakButton({ id }: { id: number }) {
+  const { status } = useApp();
+  const [phase, setPhase] = useState<"idle" | "loading" | "playing">("idle");
+  const [note, setNote] = useState<{ text: string; title: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(
+    () =>
+      onSpeech((which, event) => {
+        if (which !== id) return;
+        if (event.kind === "loading") {
+          setPhase("loading");
+          setNote(null);
+          setError(null);
+        } else if (event.kind === "playing") {
+          setPhase("playing");
+          const from = event.cached ? "the saved clip" : "ElevenLabs";
+          setNote({
+            text:
+              event.firstAudioMs === null
+                ? "Playing"
+                : `First audio after ${seconds(event.firstAudioMs)}${event.cached ? ", from a saved clip" : ""}`,
+            title:
+              `Measured on the server, from the request to the first audio from ${from}. ` +
+              `Heard here ${seconds(event.heardMs)} after the click.` +
+              (event.cut ? " A long answer, read up to a sentence near the limit." : ""),
+          });
+        } else if (event.kind === "ended") {
+          setPhase("idle");
+        } else {
+          setPhase("idle");
+          setError(event.message);
+        }
+      }),
+    [id],
+  );
+
+  if (!status?.speech?.enabled) return null;
+  const keySaved = status.speech.key_saved;
+  const active = phase !== "idle";
+  const title = !keySaved
+    ? "Read aloud needs an ElevenLabs key. Save one with: python -m switchboard speech connect"
+    : active
+      ? "Stop reading"
+      : "Read aloud with ElevenLabs. This sends the answer's text to ElevenLabs.";
+  return (
+    <>
+      <IconButton
+        label={active ? "Stop reading" : "Read aloud"}
+        title={title}
+        pressed={active}
+        disabled={!keySaved}
+        onClick={() => void speak(id)}
+      >
+        {active ? <Square size={13} aria-hidden /> : <Volume2 size={15} aria-hidden />}
+      </IconButton>
+      {phase === "loading" && <span className="speech-note muted small">Asking ElevenLabs…</span>}
+      {phase !== "loading" && note && (
+        <span className="speech-note muted small" title={note.title}>
+          {note.text}
+        </span>
+      )}
+      {error && (
+        <span className="speech-error small" role="alert">
+          {error}
+        </span>
+      )}
+    </>
   );
 }
 

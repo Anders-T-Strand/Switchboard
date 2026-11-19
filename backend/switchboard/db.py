@@ -147,6 +147,26 @@ CREATE TABLE IF NOT EXISTS brief_sources (
   collected_at TEXT NOT NULL         -- when it last delivered. An open item it didn't list then is no longer current.
 );
 
+-- Every play of an answer read aloud, with how long it took. No text: clip_key is a hash, and it is
+-- cleared, with the clip, when the answer's chat is deleted. The row stays for the latency numbers.
+CREATE TABLE IF NOT EXISTS speech (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id INTEGER REFERENCES requests(id) ON DELETE SET NULL,
+  created_at TEXT NOT NULL,
+  voice_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  chars INTEGER NOT NULL,            -- characters of the text read
+  chars_sent INTEGER NOT NULL,       -- characters sent to ElevenLabs. 0 when it played from a saved clip
+  cached INTEGER NOT NULL DEFAULT 0, -- 1 when it played from a saved clip
+  clip_key TEXT,                     -- sha256 of model, voice, format and text: the saved clip's name
+  status TEXT NOT NULL,              -- streaming | ok | stopped | error
+  first_audio_ms INTEGER,            -- from the request reaching Switchboard to its first audio
+  total_ms INTEGER,                  -- from the request to the last byte
+  bytes INTEGER NOT NULL DEFAULT 0,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_speech_request ON speech(request_id);
+
 -- What the local model said about a message, so each message is sorted once. A newer message in
 -- the same conversation has an id of its own and is sorted again.
 CREATE TABLE IF NOT EXISTS brief_triage (

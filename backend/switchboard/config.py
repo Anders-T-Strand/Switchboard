@@ -237,6 +237,25 @@ class BriefCfg(BaseModel):
         return dt_time(int(hours), int(minutes))
 
 
+class SpeechCfg(BaseModel):
+    """Read aloud: a speaker button on Console answers, spoken by ElevenLabs. The API key is a secret
+    and isn't a setting."""
+    enabled: bool = False
+    voice_id: str = "JBFqnCBsd6RMkjVDRZzb"  # George, one of ElevenLabs' default voices
+    model_id: str = "eleven_flash_v2_5"  # their lowest-latency model
+    # Longer answers are cut at a sentence near this. ElevenLabs bills per character.
+    max_chars: int = Field(2500, ge=100, le=40000)
+    cache: bool = True  # keep finished clips under data/speech, so playing one again is free
+
+    @field_validator("voice_id", "model_id")
+    @classmethod
+    def _plain_id(cls, value: str) -> str:
+        # The voice goes into the request's address, so nothing that could change the path gets in.
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
+            raise ValueError("has to be an ElevenLabs id: letters, digits, dots, dashes and underscores")
+        return value
+
+
 class Config(BaseModel):
     server: ServerCfg = Field(default_factory=ServerCfg)
     ollama: OllamaCfg = Field(default_factory=OllamaCfg)
@@ -247,6 +266,7 @@ class Config(BaseModel):
     chat: ChatCfg = Field(default_factory=ChatCfg)
     index: IndexCfg = Field(default_factory=IndexCfg)
     brief: BriefCfg = Field(default_factory=BriefCfg)
+    speech: SpeechCfg = Field(default_factory=SpeechCfg)
 
     @model_validator(mode="after")
     def _check_references(self) -> Config:
@@ -302,6 +322,10 @@ class Config(BaseModel):
         if not p:
             return None
         return Path(p) if Path(p).is_absolute() else REPO_ROOT / p
+
+    @property
+    def speech_path(self) -> Path:
+        return self.data_path / "speech"
 
     @property
     def claude_workdir(self) -> Path:

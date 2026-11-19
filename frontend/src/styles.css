@@ -1315,12 +1315,19 @@ table.rows-clickable tbody tr:hover td {
   color: var(--ink-3);
   padding: 6px;
 }
-.icon-btn:hover {
+.icon-btn:hover:not(:disabled) {
   color: var(--ink);
   background: var(--panel);
 }
 .icon-btn[aria-pressed="true"] {
   color: var(--brass);
+}
+.speech-note {
+  white-space: nowrap;
+  cursor: default;
+}
+.speech-error {
+  color: var(--danger);
 }
 .link-button {
   display: inline-flex;

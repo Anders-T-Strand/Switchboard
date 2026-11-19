@@ -16,7 +16,8 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
 - **Its own window on Windows.** `switchboard.cmd` opens the dashboard as a desktop app, with a tray icon and its own name and icon on the taskbar, and no terminal left open. It is the same local server in one Python process, with no Electron and no bundled exe.
-- **Tested and checked.** 266 tests run against a fake Ollama, a fake `claude` CLI and Qdrant's in-process mode, on Windows and Linux in CI.
+- **Answers read aloud, with the latency measured.** A speaker button on each answer has ElevenLabs read it. The audio starts playing while it is still being made, a replay comes from a saved clip at no cost, and every play records its time to first audio.
+- **Tested and checked.** 306 tests run against a fake Ollama, a fake `claude` CLI, a fake ElevenLabs and Qdrant's in-process mode, on Windows and Linux in CI.
 
 ## Architecture
 
@@ -34,6 +35,7 @@ flowchart TB
     LOGS["Claude Code session logs"] -->|"incremental sync"| DB
     DB -->|"background indexer"| EM["qwen3-embedding"]
     EM --> QD
+    API <-.->|"read aloud: text out, MP3 back"| EL["ElevenLabs<br/>streaming text to speech"]
 ```
 
 ## Design decisions
@@ -45,10 +47,11 @@ flowchart TB
 - **Learning comes from you, not from the models grading themselves.** A model judging its own answers would confirm its own mistakes, and having Claude grade every answer would cost a Claude call per prompt. So the votes are your ratings, plus corrections and approvals the classifier reads from your next message. Those count as half a rating, since they're an inference, and your own rating always replaces them. Moves need several similar votes, and every move is shown with the prompts behind it.
 - **History is shaped per provider.** Ollama gets earlier turns as chat messages. Claude gets a transcript in its system prompt, which also covers turns another model answered. Both are trimmed oldest first to a per-provider budget.
 - **A window around the server, not a second app.** The desktop app is the same FastAPI server and the same built dashboard. pywebview shows it in a WebView2 window and pystray adds the tray icon, all in the Python process that runs the server. Electron or Tauri would have meant a second toolchain and a packaging step for the same page. The server's port is also the lock that keeps it to one copy: a second launch finds the port taken and asks the first to bring its window forward.
+- **Read aloud goes through the server.** The page asks Switchboard for an answer's audio and Switchboard asks ElevenLabs, so the API key stays in the credential store and never reaches the browser. The server waits for the first chunk of audio before it answers the page. That is why an error can still come back as a message, and why the time to first audio is known in time to send it along in a header.
 
 ## Tech stack
 
-Python 3.11+, FastAPI, SQLite, Qdrant, Ollama, Claude Code CLI. React 19, TypeScript, Vite. pywebview and pystray for the app window. pytest, ruff and GitHub Actions.
+Python 3.11+, FastAPI, SQLite, Qdrant, Ollama, Claude Code CLI, ElevenLabs text to speech. React 19, TypeScript, Vite. pywebview and pystray for the app window. pytest, ruff and GitHub Actions.
 
 ## How routing works
 
@@ -82,6 +85,32 @@ Every prompt belongs to a chat, including ones sent from the terminal, so any ea
 - **Download the history.** The chat list links to two JSON Lines files: whole chats, and one line per turn with the routing decision, the outcome, the previous prompt, your rating and what your next message said about the answer.
 
 Prompts sent before chats existed were turned into one-turn chats the first time the server started, so they can be continued too.
+
+## Read aloud
+
+Each answer in the Console has a speaker button that reads it aloud with [ElevenLabs](https://elevenlabs.io). It is off until you save an API key and turn it on:
+
+```powershell
+python -m switchboard speech connect   # paste your ElevenLabs API key at a hidden prompt
+python -m switchboard speech status    # plays, characters sent and timings, as counts
+python -m switchboard speech forget    # remove the key again
+```
+
+Then set `enabled: true` under `speech:` in `config.local.yaml` and restart Switchboard.
+
+- **The key stays on the server.** It is kept in the operating system's credential store. The page asks Switchboard for an answer's audio, and Switchboard calls ElevenLabs' streaming endpoint with the key in a header.
+- **It plays before the clip is finished.** Switchboard passes the audio on as ElevenLabs makes it, and the page plays it with Media Source Extensions. Where a browser can't stream MP3 that way, the page fetches the whole clip first.
+- **Markdown is read as sentences.** Code blocks are skipped, a link is read by its text, a bare web address is left out and a table is read row by row. ElevenLabs bills by the character, so a long answer is cut at a sentence near `max_chars`, 2,500 by default.
+- **A replay costs nothing.** A finished clip is kept under `data/speech`, named by a hash of the text, the voice, the model and the format, and playing it again sends nothing. A clip that was stopped or broke off is never kept, and deleting a chat deletes the clips no other chat uses.
+- **One answer plays at a time.** Starting another stops the one playing, and pressing the button again stops it.
+- **Errors come back before any audio,** as a message under the answer: read aloud is off, no key is saved, ElevenLabs refused the key, or what ElevenLabs said went wrong.
+
+How the latency is measured:
+
+- **Time to first audio is measured on the server,** from when the request reaches Switchboard to when the first chunk of audio from ElevenLabs is in hand. It covers looking up and cleaning the answer, reading the key, the connection to ElevenLabs and ElevenLabs' own time. The Console shows it next to the button after every play. Its tooltip adds how long after the click the sound started in the browser, which also counts decoding and buffering.
+- **Every play is recorded:** characters sent, whether it came from a saved clip, how the stream ended (sent in full, stopped by the page before it was, or broken off by ElevenLabs), the time to first audio and the time to the last byte. Nothing from the answer goes in that table.
+- **The Models page shows the medians,** from ElevenLabs and from saved clips separately, along with the characters sent in plays ElevenLabs answered and how much room the saved clips take.
+- **The defaults are picked for speed.** The model is `eleven_flash_v2_5`, ElevenLabs' lowest-latency model, and the voice is George, one of its default voices. The HTTP client is made when Switchboard starts, since loading its certificates takes over a tenth of a second. It stays open between plays and keeps its connection for a minute, so plays close together skip the TLS handshake.
 
 ## Vector index (Qdrant)
 
@@ -117,6 +146,7 @@ The embedding model is small (about 640 MB) and stays loaded next to your chat m
 - **Claude Code usage.** Your own Claude Code sessions are read from `~/.claude/projects/**/*.jsonl` every minute, so the dashboard shows usage by model and day even for work done outside it. Calls the router makes through `claude -p` are tagged separately. Chats on claude.ai don't write local logs, so they can't be counted.
 - **Cost at API rates.** A Pro plan isn't billed per token, so costs are shown as what the same usage would cost on the Claude API. Local answers are priced against a reference model (Sonnet by default) to estimate what running locally kept off Claude. Local and Claude tokenizers differ, so treat that one as a ballpark.
 - **Tasks.** A simple to do / in progress / done board. Attach prompts to a task to see how many tokens each piece of work takes.
+- **Read aloud.** Every play, with the characters sent to ElevenLabs and how long the first audio took.
 
 ## Today
 
@@ -166,6 +196,7 @@ The rules every source has to keep:
 - Node.js 22 LTS (only to build the dashboard)
 - [Ollama](https://ollama.com) with at least one model pulled
 - [Claude Code](https://code.claude.com), installed and logged in with your Claude account
+- An [ElevenLabs](https://elevenlabs.io) API key, only for read aloud
 
 The app window on Windows is drawn by the WebView2 runtime. Windows 11 includes it and Windows 10 usually has it. Without it, use the browser instead (`.\switchboard serve`).
 
@@ -277,6 +308,7 @@ Settings of your own that shouldn't be published go in `config.local.yaml`, next
 | `claude` | CLI path, timeout, tools to block, `use_subscription`, which strips `ANTHROPIC_API_KEY` from the `claude -p` environment so routed calls use your plan instead of API billing, and `skip_project_context`, which keeps this repo's `CLAUDE.md` files and Claude Code's auto memory out of routed calls. |
 | `pricing` | Per-million-token prices used for the API-rate estimates. |
 | `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. `build_after` is the local time it is built from, in quotes, such as `"06:30"`. `coursework` sets how far ahead an assignment is listed (`lookahead_days`) and how long after its due date (`overdue_days`). `mail` takes your app registration's `client_id`, how far back to look (`lookback_days`), how many messages to read (`max_messages`) and a few lines on how you write, for drafts (`writing_notes`). |
+| `speech` | Read aloud with ElevenLabs. `enabled` turns it on. It is off by default, and `config.local.yaml` is the place to turn it on. `voice_id` and `model_id` pick the voice and the model, George and `eleven_flash_v2_5` by default. `max_chars` is where a long answer is cut, and `cache: false` stops keeping finished clips. |
 | `server.host` | Set to your Tailscale IP or `0.0.0.0` to open the dashboard from other devices. There is no login, so only expose it on a private network. |
 
 To send moderate coding work to Claude as well, uncomment the `code` rule in `config.yaml`. If Opus isn't available on your plan in Claude Code, complexity 5 prompts fall back to Sonnet on their own, or point the `expert` rule at `claude-sonnet`.
@@ -288,7 +320,7 @@ Routed Claude calls count against the same usage limits as your normal Claude an
 ## Development
 
 ```powershell
-# Backend lint and tests (fake Ollama, fake claude CLI and in-process Qdrant, no network needed)
+# Backend lint and tests (fake Ollama, fake claude CLI, fake ElevenLabs and in-process Qdrant, no network needed)
 cd backend
 pip install -r requirements.txt pytest ruff
 ruff check switchboard tests
@@ -316,6 +348,7 @@ backend/switchboard/
   startup.py       Start with Windows: a shortcut in the Startup folder that opens the app in the tray
   brief/           the morning brief: its sources (Outlook through Microsoft Graph, a Canvas calendar feed), mail triage and drafts by a local model, its own tables, the build and the brief command
   credentials.py   secrets in the operating system's credential store, through keyring, in parts when they are long
+  speech/          read aloud: Markdown into sentences, the ElevenLabs stream, saved clips, the play log and the speech command
 backend/tests/     pytest suite
 frontend/src/      React + TypeScript dashboard
 ```

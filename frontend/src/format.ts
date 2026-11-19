@@ -27,6 +27,12 @@ export function pct(n: number | null | undefined): string {
   return `${Math.round(n * 100)}%`;
 }
 
+/** Milliseconds as seconds with two decimals, for latency: 0.42 s */
+export function seconds(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || Number.isNaN(ms)) return "–";
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
 export function duration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return "–";
   if (ms < 1000) return `${ms} ms`;
