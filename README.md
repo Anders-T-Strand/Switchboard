@@ -6,6 +6,8 @@ A self-hosted AI console that decides, for every prompt, which model should answ
 
 Most prompts are answered by a Qwen model running locally through Ollama. The ones that need more go to Claude Sonnet or Opus through Claude Code's headless mode, on a Claude Pro subscription instead of API billing. Every chat is saved and can be picked up later, every turn records why it was routed where it was, and a thumbs up or down on an answer teaches the router which model handles which kind of prompt.
 
+It also builds a morning brief, a daily list of mail that needs a reply and coursework that is due, sorted by the local model so none of it goes to Claude. Any answer can be read aloud with ElevenLabs.
+
 ![Overview](docs/overview.png)
 
 ## Highlights
@@ -16,8 +18,9 @@ Most prompts are answered by a Qwen model running locally through Ollama. The on
 - **Hybrid search and memory.** Chat search fuses vector and keyword results with reciprocal rank fusion. Memory pulls related turns from other chats into a new one.
 - **Usage you can see.** Tokens, latency and API-equivalent cost per model, plus your own Claude Code sessions read incrementally from its local logs.
 - **Its own window on Windows.** `switchboard.cmd` opens the dashboard as a desktop app, with a tray icon and its own name and icon on the taskbar, and no terminal left open. It is the same local server in one Python process, with no Electron and no bundled exe.
+- **A morning brief that stays local.** Every morning Switchboard lists the Outlook mail that needs a reply and the Canvas coursework that is due. A local model sorts the mail into what needs you and what it could draft, and writes a draft when asked. Nothing from the brief is sent to Claude, and nothing is ever sent as mail.
 - **Answers read aloud, with the latency measured.** A speaker button on each answer has ElevenLabs read it. The audio starts playing while it is still being made, a replay comes from a saved clip at no cost, and every play records its time to first audio.
-- **Tested and checked.** 306 tests run against a fake Ollama, a fake `claude` CLI, a fake ElevenLabs and Qdrant's in-process mode, on Windows and Linux in CI.
+- **Tested and checked.** 325 tests run against a fake Ollama, a fake `claude` CLI, a fake Microsoft Graph, a fake ElevenLabs and Qdrant's in-process mode, on Windows and Linux in CI.
 
 ## Architecture
 
@@ -36,6 +39,10 @@ flowchart TB
     DB -->|"background indexer"| EM["qwen3-embedding"]
     EM --> QD
     API <-.->|"read aloud: text out, MP3 back"| EL["ElevenLabs<br/>streaming text to speech"]
+    MAIL["Outlook mail<br/>Microsoft Graph, read-only"] --> BR["Morning brief"]
+    FEED["Canvas calendar feed"] --> BR
+    BR -->|"sort and draft, not through the router"| OL
+    BR --> BT[("Brief tables<br/>apart from chats")]
 ```
 
 ## Design decisions
@@ -48,10 +55,12 @@ flowchart TB
 - **History is shaped per provider.** Ollama gets earlier turns as chat messages. Claude gets a transcript in its system prompt, which also covers turns another model answered. Both are trimmed oldest first to a per-provider budget.
 - **A window around the server, not a second app.** The desktop app is the same FastAPI server and the same built dashboard. pywebview shows it in a WebView2 window and pystray adds the tray icon, all in the Python process that runs the server. Electron or Tauri would have meant a second toolchain and a packaging step for the same page. The server's port is also the lock that keeps it to one copy: a second launch finds the port taken and asks the first to bring its window forward.
 - **Read aloud goes through the server.** The page asks Switchboard for an answer's audio and Switchboard asks ElevenLabs, so the API key stays in the credential store and never reaches the browser. The server waits for the first chunk of audio before it answers the page. That is why an error can still come back as a message, and why the time to first audio is known in time to send it along in a header.
+- **The brief never reaches Claude.** Mail and coursework are private, while chats are indexed and can reach Claude through Memory or a fallback. So the brief calls Ollama directly instead of going through the router, and keeps its items in tables of their own. Every mail is treated as untrusted input: it goes to the model fenced off as data, the answer has to fit a fixed JSON schema, and the page shows it as plain text.
+- **A setting Switchboard doesn't know stops it at startup.** Pydantic drops unknown keys by default, so a section one level out of place was ignored, and the app then failed somewhere else with a message that pointed the wrong way. Now every part of the config refuses keys it doesn't define, and the error names the file, the setting and, for one in the wrong place, where it belongs.
 
 ## Tech stack
 
-Python 3.11+, FastAPI, SQLite, Qdrant, Ollama, Claude Code CLI, ElevenLabs text to speech. React 19, TypeScript, Vite. pywebview and pystray for the app window. pytest, ruff and GitHub Actions.
+Python 3.11+, FastAPI, SQLite, Qdrant, Ollama, Claude Code CLI, Microsoft Graph, ElevenLabs text to speech. React 19, TypeScript, Vite. pywebview and pystray for the app window, keyring for secrets. pytest, ruff and GitHub Actions.
 
 ## How routing works
 
@@ -110,7 +119,7 @@ How the latency is measured:
 - **Time to first audio is measured on the server,** from when the request reaches Switchboard to when the first chunk of audio from ElevenLabs is in hand. It covers looking up and cleaning the answer, reading the key, the connection to ElevenLabs and ElevenLabs' own time. The Console shows it next to the button after every play. Its tooltip adds how long after the click the sound started in the browser, which also counts decoding and buffering.
 - **Every play is recorded:** characters sent, whether it came from a saved clip, how the stream ended (sent in full, stopped by the page before it was, or broken off by ElevenLabs), the time to first audio and the time to the last byte. Nothing from the answer goes in that table.
 - **The Models page shows the medians,** from ElevenLabs and from saved clips separately, along with the characters sent in plays ElevenLabs answered and how much room the saved clips take.
-- **The defaults are picked for speed.** The model is `eleven_flash_v2_5`, ElevenLabs' lowest-latency model, and the voice is George, one of its default voices. The HTTP client is made when Switchboard starts, since loading its certificates takes over a tenth of a second. It stays open between plays and keeps its connection for a minute, so plays close together skip the TLS handshake.
+- **The defaults are picked for speed.** The model is `eleven_flash_v2_5`, ElevenLabs' lowest-latency model, and the voice is George, one of its default voices. With read aloud on, the HTTP client is made when Switchboard starts, since loading its certificates takes over a tenth of a second. It stays open between plays and keeps its connection for a minute, so plays close together skip the TLS handshake.
 
 ## Vector index (Qdrant)
 
@@ -147,6 +156,7 @@ The embedding model is small (about 640 MB) and stays loaded next to your chat m
 - **Cost at API rates.** A Pro plan isn't billed per token, so costs are shown as what the same usage would cost on the Claude API. Local answers are priced against a reference model (Sonnet by default) to estimate what running locally kept off Claude. Local and Claude tokenizers differ, so treat that one as a ballpark.
 - **Tasks.** A simple to do / in progress / done board. Attach prompts to a task to see how many tokens each piece of work takes.
 - **Read aloud.** Every play, with the characters sent to ElevenLabs and how long the first audio took.
+- **Morning brief builds.** When each build ran and what started it, what each source found or why it failed, and the local model's tokens and time.
 
 ## Today
 
@@ -171,7 +181,7 @@ How mail gets there:
 - **Read-only, through your own app registration.** Switchboard signs in to Microsoft Graph with the device code flow, as a public client with no secret, and asks only for `Mail.Read`, which can't send, delete or change anything. The sign-in is kept in the credential store and renewed on every build. `connect` walks you through the registration and prints only the mailbox's shape: how many messages and conversations, how many you've answered. Run again, it reuses the saved sign-in to check the mailbox without a new code.
 - **Handled mail leaves the list on its own.** A conversation where you replied after its last message is done, and so is one you flagged complete. A new message in it opens it again.
 - **Sorted by a local model and nothing else.** Each new message goes to Ollama once, with its sender, subject and the 255-character preview Graph provides, fenced off as data. The answer has to fit a fixed JSON schema: reply, a task or nothing to do, whether a model could draft the reply, a category, a one-line summary and any deadline the mail names. Every field is checked, links are stripped from what the model writes, and the result is shown as plain text, so a message written to fool the model can at most mislabel itself. Mail the model says needs nothing stays off the list.
-- **Each message is sorted once,** so a build reads up to 200 messages, newest first, and says so when there were more in those days. Only the first build takes a while.
+- **Each message is sorted once,** so a build reads up to `max_messages` (200 by default), newest first, and says so when there were more in those days. Only the first build takes a while.
 - **Drafts on request, never sent.** Draft a reply on any mail card and the local model writes one from the conversation's own text and a few lines you wrote about how you write. Graph gives each message without the quoted ones under it, so the model reads the thread once, oldest first, and the message being answered always fits. Where the reply needs something only you know, such as times you're free, it leaves a placeholder in brackets. The draft is shown as plain text with a Copy button, links it wasn't given in your notes become [link], and a new message in the conversation clears it. Switchboard can't send mail: its permission is read-only.
 - **If the model is down,** mail Outlook files under Focused is listed unsorted, the rest waits, and the next build tries again.
 - **Long sign-ins fit.** Windows Credential Manager refuses a value over 1,280 characters, and a Microsoft refresh token can be longer, so a long secret is stored in parts.
@@ -197,6 +207,7 @@ The rules every source has to keep:
 - [Ollama](https://ollama.com) with at least one model pulled
 - [Claude Code](https://code.claude.com), installed and logged in with your Claude account
 - An [ElevenLabs](https://elevenlabs.io) API key, only for read aloud
+- For the morning brief, which is optional: a personal Microsoft account's Outlook mailbox with your own app registration in Microsoft Entra, and the calendar feed link from Canvas
 
 The app window on Windows is drawn by the WebView2 runtime. Windows 11 includes it and Windows 10 usually has it. Without it, use the browser instead (`.\switchboard serve`).
 
@@ -208,6 +219,7 @@ cd Switchboard
 
 # Pull the local models named in config.yaml (or edit config.yaml to match what you have)
 ollama pull qwen3.6:35b-a3b
+ollama pull qwen3-embedding:0.6b
 
 # Make sure Claude Code works headless on your login
 claude -p "say hi"
@@ -222,7 +234,7 @@ After the first run it just starts. It rebuilds the dashboard on its own when yo
 
 ### The app window
 
-- **Closing the window doesn't stop Switchboard.** It hides to a tray icon and the server keeps running, so `ask` in a terminal still works. Click the tray icon to get the window back, or right-click it for Open, Open in browser and Quit. Quit is what stops the server. Windows 11 puts new tray icons behind the `^` arrow next to the clock, and you can drag this one out of there.
+- **Closing the window doesn't stop Switchboard.** It hides to a tray icon and the server keeps running, so `ask` in a terminal still works. Click the tray icon to get the window back, or right-click it for Open, Open in browser, Build the brief now (while the brief is on), Start with Windows and Quit. Quit is what stops the server. Windows 11 puts new tray icons behind the `^` arrow next to the clock, and you can drag this one out of there.
 - **One copy runs at a time.** Starting it again brings the window that's already open to the front.
 - **To keep it on the taskbar,** right-click its taskbar icon while it's running and choose Pin to taskbar. Pin the running app like this and not a shortcut to `switchboard.cmd`, or the taskbar shows the shortcut and the app as two icons. The pin still runs `switchboard.cmd`, so it keeps picking up what you pull.
 - **The server log is a file,** since there is no terminal to print to: `data\logs\switchboard.log`. It starts a new file at 1 MB and keeps the two before it. If Switchboard can't start, a dialog says why.
@@ -288,6 +300,8 @@ python -m switchboard ask --chat last "And how would that change on Linux?"
 
 The routing decision, token counts and chat id print to stderr and the answer to stdout, so the answer can be piped somewhere else. `--chat` takes a chat id or `last` to continue a conversation.
 
+The other commands are `brief` and `speech`, described in their own sections, and `sync`, which reads new Claude Code session logs once and prints a summary. From the repo folder, `.\switchboard` runs any of them as well, such as `.\switchboard brief status`.
+
 ## Configuration
 
 Everything lives in `config.yaml`. Restart Switchboard after editing it. With the app window that means Quit in the tray menu first, since closing the window leaves it running.
@@ -307,11 +321,12 @@ A setting Switchboard doesn't know, in either file, stops it at startup instead 
 | `routing.effort.by_reasoning` | Which effort level each reasoning rating gets. Leave a level out to use your own `/effort` setting for it. |
 | `routing.classifier` | Which local model classifies, and whether it may use whatever is already loaded. |
 | `routing.fallback_order` | What to try when the chosen model fails. |
+| `ollama` | Where Ollama answers (`base_url`), how long a call may take (`timeout_s`) and how long a model stays in VRAM after a request (`keep_alive`, 30 minutes). |
 | `claude` | CLI path, timeout, tools to block, `use_subscription`, which strips `ANTHROPIC_API_KEY` from the `claude -p` environment so routed calls use your plan instead of API billing, and `skip_project_context`, which keeps this repo's `CLAUDE.md` files and Claude Code's auto memory out of routed calls. |
 | `pricing` | Per-million-token prices used for the API-rate estimates. |
-| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. `build_after` is the local time it is built from, in quotes, such as `"06:30"`. `coursework` sets how far ahead an assignment is listed (`lookahead_days`) and how long after its due date (`overdue_days`). `mail` takes your app registration's `client_id`, how far back to look (`lookback_days`), how many messages to read (`max_messages`) and a few lines on how you write, for drafts (`writing_notes`). |
+| `brief` | `enabled` turns the morning brief on. It is off by default, and `config.local.yaml` is the place to turn it on. `build_after` is the local time it is built from, in quotes, such as `"06:30"`. `coursework` sets how far ahead an assignment is listed (`lookahead_days`) and how long after its due date (`overdue_days`). `mail` takes your app registration's `client_id`, the sign-in `tenant` (`consumers`, for a personal Microsoft account), how far back to look (`lookback_days`), how many messages to read (`max_messages`) and a few lines on how you write, for drafts (`writing_notes`). |
 | `speech` | Read aloud with ElevenLabs. `enabled` turns it on. It is off by default, and `config.local.yaml` is the place to turn it on. `voice_id` and `model_id` pick the voice and the model, George and `eleven_flash_v2_5` by default. `max_chars` is where a long answer is cut, and `cache: false` stops keeping finished clips. |
-| `server.host` | Set to your Tailscale IP or `0.0.0.0` to open the dashboard from other devices. There is no login, so only expose it on a private network. |
+| `server` | `host` is 127.0.0.1. Set it to your Tailscale IP or `0.0.0.0` to open the dashboard from other devices. There is no login, so only expose it on a private network. `port` is 8787, and `data_dir` holds the database, the log and the saved clips. |
 
 To send moderate coding work to Claude as well, uncomment the `code` rule in `config.yaml`. If Opus isn't available on your plan in Claude Code, complexity 5 prompts fall back to Sonnet on their own, or point the `expert` rule at `claude-sonnet`.
 
@@ -343,16 +358,18 @@ backend/switchboard/
   providers/       Ollama HTTP client and the claude -p runner
   claude_logs.py   incremental reader for Claude Code session logs
   stats.py         aggregations for the dashboard
+  pricing.py       cost at API rates, and what answering locally kept off Claude
   db.py            SQLite schema and migrations
-  config.py        config.yaml models and validation
+  config.py        config.yaml and config.local.yaml: models, validation, and errors that name the file and the setting
   main.py          FastAPI app, background threads, serves the built dashboard at /
+  __main__.py      the command line: serve, app, ask, brief, speech and sync
   desktop.py       the app window: server thread, tray icon and its menu, notifications, one copy per port, log file
   startup.py       Start with Windows: a shortcut in the Startup folder that opens the app in the tray
   brief/           the morning brief: its sources (Outlook through Microsoft Graph, a Canvas calendar feed), mail triage and drafts by a local model, its own tables, the build and the brief command
   credentials.py   secrets in the operating system's credential store, through keyring, in parts when they are long
   speech/          read aloud: Markdown into sentences, the ElevenLabs stream, saved clips, the play log and the speech command
 backend/tests/     pytest suite
-frontend/src/      React + TypeScript dashboard
+frontend/src/      React + TypeScript dashboard: the Today, Overview, Console, Requests, Tasks and Models pages
 ```
 
 ## Ideas for later
@@ -360,3 +377,5 @@ frontend/src/      React + TypeScript dashboard
 - Train a router on the rated turns (the Qdrant vectors make good features) and compare it against the classifier and the rating-based ladder
 - Stream answers as they're generated
 - Re-run a turn on a different model to compare answers
+- Give every model, local ones included, a short system prompt about you and your setup, kept in `config.local.yaml`
+- Tag a whole chat with a task, and count Claude Code usage toward tasks by project folder
