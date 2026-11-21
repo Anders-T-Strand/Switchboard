@@ -95,7 +95,7 @@ backend/switchboard/
   stats.py         aggregations for the Overview page
   pricing.py       cost at API rates, and the cost avoided by answering locally
   db.py            SQLite schema (WAL) and column migrations (ADDED_COLUMNS)
-  config.py        pydantic models for config.yaml, with cross-reference validation
+  config.py        pydantic models for config.yaml, with cross-reference validation and no unknown keys
   main.py          FastAPI app, background threads, serves the built dashboard at /
   desktop.py       the app window: uvicorn in a thread, pywebview window, pystray tray icon and menu, notifications, one copy per port, log file
   startup.py       Start with Windows: a Startup folder shortcut that opens the app hidden in the tray
@@ -131,6 +131,7 @@ frontend/src/      React 19 + TypeScript (strict) + Vite
 - **What a brief source says when it fails is shown and saved:** raise `SourceError` with a message that is safe on the page. Any other exception is cut down to its type name, in the run and in the log, because an httpx error repeats the address it failed on, and a feed address is a secret.
 - **Real brief items are private:** they are someone's mail and coursework, and an assistant that reads them sends them to Claude. Don't open the Today page, read `brief_items` or `brief_triage`, call `/api/brief` or run a build on the real instance, and never run `brief connect` yourself. Work with `brief demo` on a config of its own, and use `brief status`, which prints counts only.
 - **`config.local.yaml` is looked for next to the config in use:** so a second instance on its own config never picks up the real one. The launchers read the Qdrant address from `config.yaml` alone, and an override of it in the local file isn't seen by them.
+- **A key the config doesn't know stops the load:** every model in `config.py` is a `Settings`, which forbids keys it doesn't define. `load_config` turns pydantic's report into a `ConfigError` that names the file, the setting and, for one in the wrong place, where it goes. A new section has to be a `Settings` too, and a test checks the whole tree. Write a field validator's message to follow the setting's path, in lowercase, such as "has to be a time of day". A section that only one branch knows, left in `config.local.yaml`, stops a checkout of any other branch.
 - **The brief command must not find the real server in a test:** it asks a running Switchboard to do the work when one answers on the configured port, which is 8787 in the test config too. Patch `brief_cli.Server.find`, as the `no_server` fixture does.
 - **Tests get an empty credential store:** an autouse fixture in `conftest.py` puts a fake in place of `credentials._store` for every test and clears `SWITCHBOARD_` secrets from the environment. Without it, a test on a machine with a saved feed link would fetch the real feed.
 - **The Today page shows what a source still lists:** `brief_sources` records when each source last delivered, and an open item it didn't list then is hidden, not deleted. That is how coursework drops off after its due date. The comparison is by timestamp, so a test with a fixed clock has to move it forward between two builds.

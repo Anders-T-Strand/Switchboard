@@ -17,7 +17,7 @@ from pydantic import ValidationError
 
 from switchboard import credentials
 from switchboard.__main__ import build_parser
-from switchboard.config import Config, SpeechCfg
+from switchboard.config import Config, ConfigError, SpeechCfg, load_config
 from switchboard.db import connect, now_iso, rows
 from switchboard.main import create_app
 from switchboard.speech import API_KEY, Speech, clip_key, player, speakable
@@ -586,3 +586,22 @@ def test_the_tracked_config_keeps_read_aloud_off():
     raw = yaml.safe_load((Path(__file__).parents[2] / "config.yaml").read_text(encoding="utf-8"))
     assert raw["speech"] == {"enabled": False, "voice_id": VOICE, "model_id": MODEL, "max_chars": 2500, "cache": True}
     assert Config.model_validate(raw).speech.enabled is False
+
+
+def test_an_unknown_key_under_speech_stops_the_load(tmp_path):
+    base = {"server": {"data_dir": str(tmp_path / "data")},
+            "models": {"qwen-moe": {"provider": "ollama", "model": "qwen3.6:35b-a3b"}},
+            "routing": {"classifier": {"model": "qwen-moe"}, "rules": [{"name": "default", "model": "qwen-moe"}]},
+            "pricing": {"reference_model": None}}
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(base), encoding="utf-8")
+    local = tmp_path / "config.local.yaml"
+    for settings, message in [
+        ({"speech": {"enabled": True, "voice": "made-up"}}, "In config.local.yaml, speech.voice isn't a setting."),
+        ({"voice_id": "made-up"}, "In config.local.yaml, voice_id isn't a setting at the top level. "
+                                  "It goes under speech, as speech.voice_id."),
+    ]:
+        local.write_text(yaml.safe_dump(settings), encoding="utf-8")
+        with pytest.raises(ConfigError) as caught:
+            load_config(path)
+        assert str(caught.value) == message

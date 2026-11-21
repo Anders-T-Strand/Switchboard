@@ -591,7 +591,7 @@ def test_run_hands_over_instead_of_starting_twice(running_app, cfg, monkeypatch,
 
 def test_run_reports_a_config_that_does_not_load(monkeypatch):
     def broken():
-        raise ValueError("config.yaml problems:\n  - routing.rules is empty")
+        raise ValueError("Problems in the config:\n  - routing.rules is empty")
 
     alerts = []
     monkeypatch.setattr(desktop, "get_config", broken)
