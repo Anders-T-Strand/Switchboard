@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -18,6 +18,7 @@ from .brief import Busy, ItemNotFound, SourceError
 from .config import REPO_ROOT, Config, get_config
 from .db import init_db
 from .service import NotFound, Service
+from .speech import SpeechError
 
 log = logging.getLogger("switchboard")
 
@@ -126,6 +127,8 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
         stop = threading.Event()
         threads = []
         svc.brief.recover()  # a build that was cut off by the last shutdown would read as still going
+        svc.speech.recover()  # and so would a play, with a half-written clip
+        svc.speech.warm()  # so the first play's time to first audio doesn't include making the HTTP client
         if background_sync:
             threads.append(threading.Thread(target=_sync_loop, args=(cfg, stop), daemon=True, name="cc-sync"))
             if svc.index is not None:
@@ -142,6 +145,7 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
             svc.index.wake.set()
         for t in threads:
             t.join(timeout=5)
+        await svc.speech.aclose()
 
     app = FastAPI(title="Switchboard", version="0.1.0", lifespan=lifespan)
     app.state.service = svc
@@ -241,6 +245,28 @@ def create_app(cfg: Config | None = None, *, background_sync: bool = True) -> Fa
         status: str | None = None,
     ):
         return svc.list_requests(limit, offset, task_id, model, status)
+
+    @app.get("/api/requests/{rec_id}/speech")
+    async def read_aloud(rec_id: int):
+        """The answer read aloud by ElevenLabs, as MP3 that streams as it is made. Errors come back as
+        JSON before any audio. The time to first audio is in a header, since it is known by then."""
+        try:
+            play = await svc.speech.open(rec_id)
+        except SpeechError as e:
+            return JSONResponse({"detail": str(e)}, status_code=e.status)
+        headers = {
+            "Cache-Control": "no-store",
+            "X-Speech-Play": str(play.play_id),
+            "X-Speech-First-Audio-Ms": str(play.first_audio_ms),
+            "X-Speech-Cached": "1" if play.cached else "0",
+            "X-Speech-Chars": str(play.chars),
+            "X-Speech-Cut": "1" if play.cut else "0",
+        }
+        return StreamingResponse(play.chunks(), media_type="audio/mpeg", headers=headers)
+
+    @app.get("/api/speech/stats")
+    def speech_stats():
+        return svc.speech.stats()
 
     @app.get("/api/requests/{rec_id}")
     def get_request(rec_id: int):

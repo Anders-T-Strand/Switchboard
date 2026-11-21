@@ -59,7 +59,7 @@ def test_a_section_in_the_wrong_place_of_the_local_file_says_where_it_goes(tmp_p
 @pytest.mark.parametrize(("local", "hint"), [
     ({"brief": {"client_id": "made-up-id"}}, "It goes under brief.mail, as brief.mail.client_id."),
     ({"effort": {"by_reasoning": {1: "low"}}}, "It goes under routing, as routing.effort."),
-    ({"enabled": True}, "It goes under index, brief or routing.learn."),
+    ({"max_chars": 100}, "It goes under speech, chat.memory or index.embedding."),
     ({"brief": {"models": {}}}, "It goes at the top level or under pricing."),
     ({"max_effort": "high"}, "It goes under models.<name> or routing.rules[n]."),
 ])
@@ -71,6 +71,12 @@ def test_only_a_setting_that_takes_that_kind_of_value_is_suggested(tmp_path):
     # chat.memory is a section, not a switch, so memory: true isn't sent there
     assert problem(write(tmp_path, local={"memory": True})) == ("In config.local.yaml, memory isn't a setting "
                                                                 "at the top level.")
+
+
+def test_a_setting_found_in_more_than_three_places_gets_no_hint(tmp_path):
+    # ollama, claude, routing.classifier, index.qdrant and index.embedding all have one
+    assert problem(write(tmp_path, local={"timeout_s": 30})) == ("In config.local.yaml, timeout_s isn't a setting "
+                                                                 "at the top level.")
 
 
 def test_several_problems_are_listed_under_their_file(tmp_path):

@@ -173,6 +173,16 @@ brief:
     # writing_notes: >-    # a few lines on how you write, for drafts. Personal, so set it in config.local.yaml.
     #   Start with "Hi" and the first name. Sign off with "Best," and my first name. Friendly but brief.
 
+# Read aloud: a speaker button on each answer in the Console, spoken by ElevenLabs. Off until you turn it on,
+# in config.local.yaml. The answer's text goes to ElevenLabs when you press the button, and only then.
+# Save the API key with: python -m switchboard speech connect
+speech:
+  enabled: false
+  voice_id: JBFqnCBsd6RMkjVDRZzb   # George, one of ElevenLabs' default voices
+  model_id: eleven_flash_v2_5      # their lowest-latency model
+  max_chars: 2500                  # longer answers are cut at a sentence near this. ElevenLabs bills per character.
+  cache: true                      # keep finished clips under data/speech, so playing one again is free
+
 # USD per million tokens (Claude API list prices, Oct 2026). Used for API-equivalent cost
 # estimates only. Your Pro plan isn't billed per token, so treat these as "what this would
 # have cost on the API". Matched against model IDs by substring, first match wins.

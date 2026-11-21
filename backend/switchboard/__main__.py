@@ -4,6 +4,7 @@
     python -m switchboard app             start it as a desktop app: its own window and a tray icon
     python -m switchboard ask "prompt"    send a prompt to the running server
     python -m switchboard brief           build today's morning brief (also: brief status, brief connect canvas)
+    python -m switchboard speech connect  save your ElevenLabs key for read aloud (also: speech forget, speech status)
     python -m switchboard sync            read Claude Code logs once and exit
 """
 
@@ -74,6 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
                             "with made-up items, or connect and disconnect a source")
     brief.add_argument("target", nargs="?", help="what to connect or disconnect: canvas or outlook")
 
+    speech = sub.add_parser("speech", help="read aloud with ElevenLabs: save or forget the API key, or see the numbers")
+    speech.add_argument("action", nargs="?", default="status", choices=["connect", "forget", "status"],
+                        help="save the API key at a hidden prompt, remove it, or print plays and timings (the default)")
+
     sub.add_parser("sync", help="read Claude Code logs once and print a summary")
     return parser
 
@@ -115,6 +120,11 @@ def main(argv: list[str] | None = None) -> int:
         from .brief import cli as brief_cli
 
         return brief_cli.run(args, cfg)
+
+    if args.cmd == "speech":
+        from .speech import cli as speech_cli
+
+        return speech_cli.run(args, cfg)
 
     if args.cmd == "ask":
         import httpx
